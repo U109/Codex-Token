@@ -9,6 +9,7 @@ async function render(
   ActionButton,
   metadata,
   active,
+  hooks = {},
 ) {
   const { createTokenBadge } = await import('../src/ui/token-badge.mjs');
   const { createMessageUsageIndex } = await import('../src/core/message-usage.mjs');
@@ -26,6 +27,7 @@ async function render(
       useId: () => ':fixture:',
       useState: () => [false, () => {}],
       useRef: () => ({ current: null }),
+      ...hooks,
     };
     return createTokenBadge(React, ActionButton)(props);
   } finally {
@@ -113,6 +115,31 @@ test('usage tooltip is available on hover and keyboard focus, and the default ic
   const icon = nodes(button, (n) => n.tag === 'svg')[0];
   assert.equal(icon.props.viewBox, '0 0 16 16');
   assert.equal(icon.props.style.width, '16px');
+});
+
+test('usage trigger tracks native open styling and accessibility until the details close', async () => {
+  let open = false;
+  const hooks = {
+    useState: () => [open, (next) => (open = next)],
+  };
+  const renderState = () =>
+    render(fixture(), undefined, undefined, undefined, undefined, undefined, hooks);
+  const buttonIn = (tree) => nodes(tree, (node) => node.tag === 'button')[0];
+  const dialogIn = (tree) => nodes(tree, (node) => node.props?.role === 'dialog')[0];
+  const target = { focus() {}, scrollTop: 0 };
+  let tree = await renderState();
+  assert.equal(buttonIn(tree).props['data-state'], 'closed');
+  assert.equal(buttonIn(tree).props['aria-expanded'], false);
+  dialogIn(tree).props.onToggle({ newState: 'open', currentTarget: target });
+  tree = await renderState();
+  assert.equal(buttonIn(tree).props['data-state'], 'open');
+  assert.equal(buttonIn(tree).props['aria-expanded'], true);
+  buttonIn(tree).props.onPointerLeave();
+  assert.equal(open, true, 'Leaving the trigger must not close its details');
+  dialogIn(tree).props.onToggle({ newState: 'closed', currentTarget: target });
+  tree = await renderState();
+  assert.equal(buttonIn(tree).props['data-state'], 'closed');
+  assert.equal(buttonIn(tree).props['aria-expanded'], false);
 });
 test('running control shows only its exact live turn without an extra left inset or observed prefix', async () => {
   const { createMessageUsageIndex } = await import('../src/core/message-usage.mjs');

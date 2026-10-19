@@ -354,7 +354,7 @@ export async function installCdpRuntime(config, dependencies = {}) {
       // React 可能在独立根节点之后追加工具块；跟随内容移动，使统计行保持在最新内容下方。
       if (identity.running && row.lastElementChild !== entry.container)
         row.appendChild(entry.container);
-      // 不强制显示宿主操作区；增强根节点沿用原生的悬停、焦点与减少动态效果规则。
+      // 默认沿用原生显隐；详情打开期间由组件 CSS 保持所属操作区可见。
       const context = ScopedBadge ? nativeScopeContextForNode(row, scopeBrand) : null;
       if (
         entry.identityKey !== identityKey ||
@@ -362,7 +362,8 @@ export async function installCdpRuntime(config, dependencies = {}) {
         entry.presentationKey !== presentationKey
       ) {
         const badgeProps = { ...identity, actionPresentation: action.presentation };
-        let element = React.createElement(Badge, badgeProps);
+        // 虚拟列表复用节点时关闭旧消息的详情，避免将打开状态带到另一条回复。
+        let element = React.createElement(Badge, { ...badgeProps, key: identityKey });
         if (context) {
           element = React.createElement(
             context.Provider,

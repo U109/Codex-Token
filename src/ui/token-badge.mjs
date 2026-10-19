@@ -280,7 +280,13 @@ export function createTokenBadge(React, ActionButton = 'button') {
       h(
         'style',
         null,
-        '.ct-native-token{background:transparent}.ct-native-token[data-ct-action-skin="fallback"]:hover{background:color-mix(in srgb,currentColor 8%,transparent)}.ct-native-token[data-ct-action-skin="fallback"]:focus-visible{outline:2px solid currentColor;outline-offset:2px}.ct-native-popover::backdrop{background:transparent}.ct-native-fast{display:inline-flex;align-items:center}.ct-native-tooltip{pointer-events:none}',
+        // 原生工具类位于 CSS layer 内；无条件的背景声明会盖过原生 hover 和打开状态。
+        // 用 :popover-open 保持所属操作区可见，关闭、卸载或切换消息后由浏览器自动恢复。
+        '.ct-native-token[data-ct-action-skin="fallback"]{background:transparent}' +
+          '.ct-native-token[data-ct-action-skin="fallback"]:is(:hover,[data-state="open"]){background:color-mix(in srgb,currentColor 8%,transparent)}' +
+          '.ct-native-token[data-ct-action-skin="fallback"]:focus-visible{outline:2px solid currentColor;outline-offset:2px}' +
+          '.turn-action-controls:has([data-ct-cdp-root] .ct-native-popover:popover-open),.turn-action-controls > :has(> [data-ct-cdp-root] .ct-native-popover:popover-open){opacity:1}' +
+          '.ct-native-popover::backdrop{background:transparent}.ct-native-fast{display:inline-flex;align-items:center}.ct-native-tooltip{pointer-events:none}',
       ),
       h(
         ActionButton,
@@ -290,6 +296,7 @@ export function createTokenBadge(React, ActionButton = 'button') {
           type: 'button',
           className: 'ct-native-token text-tertiary ' + (actionPresentation.className ?? ''),
           'data-ct-action-skin': actionPresentation.className ? 'native' : 'fallback',
+          'data-state': open ? 'open' : 'closed',
           popovertarget: id,
           'aria-controls': id,
           'aria-expanded': open,
@@ -509,12 +516,17 @@ export function createTokenBadge(React, ActionButton = 'button') {
             bottom: 'anchor(top)',
             left: 'clamp(8px, calc(anchor(center) - 34px), calc(100vw - 76px))',
             margin: '0 0 6px',
-            padding: '6px 10px',
-            border: 0,
-            borderRadius: '6px',
-            background: '#171717',
-            color: '#fff',
-            font: '12px/16px system-ui,sans-serif',
+            padding: 'var(--tooltip-padding-block, 6px) var(--tooltip-padding-inline, 10px)',
+            border: '1px solid var(--tooltip-border-color, transparent)',
+            borderRadius: 'var(--tooltip-border-radius, 10px)',
+            cornerShape: 'var(--tooltip-corner-shape, round)',
+            background: 'var(--tooltip-background-color, #171717)',
+            color: 'var(--tooltip-text-color, #fff)',
+            boxShadow: 'var(--tooltip-box-shadow, 0 8px 18px #0f172a33)',
+            fontFamily: 'inherit',
+            fontSize: 'var(--tooltip-font-size, 12px)',
+            fontWeight: 'var(--tooltip-font-weight, 400)',
+            lineHeight: 'var(--tooltip-line-height, 16px)',
             whiteSpace: 'nowrap',
           },
         },
