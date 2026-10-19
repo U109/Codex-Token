@@ -46,7 +46,8 @@ test('installer dialogs use concise, factual confirmation and completion message
 });
 
 function installerFixture(t) {
-  const parent = fs.realpathSync(os.tmpdir()),
+  // Windows TEMP 可能使用 8.3 短路径；原生解析保持与 .NET 和快捷方式一致的长路径。
+  const parent = fs.realpathSync.native(os.tmpdir()),
     root = fs.mkdtempSync(path.join(parent, 'ct-cdp-install-test-'));
   const registry = 'HKCU:\\Software\\CodexTokenInstallerTests\\' + path.basename(root);
   t.after(() => {
@@ -63,7 +64,7 @@ function installerFixture(t) {
       ],
       { env: { ...process.env, CT_CDP_TEST_REGISTRY: registry }, windowsHide: true },
     );
-    const target = fs.realpathSync(root);
+    const target = fs.realpathSync.native(root);
     assert.equal(path.dirname(target), parent);
     assert.ok(path.basename(target).startsWith('ct-cdp-install-test-'));
     fs.rmSync(target, { recursive: true, force: true });
@@ -501,10 +502,10 @@ test(
   'CDP runtime stop signals are scoped to the installation root, never another install or legacy helper',
   { skip: process.platform !== 'win32' },
   (t) => {
-    const parent = fs.realpathSync(os.tmpdir()),
+    const parent = fs.realpathSync.native(os.tmpdir()),
       root = fs.mkdtempSync(path.join(parent, 'ct-cdp-stop-test-'));
     t.after(() => {
-      const target = fs.realpathSync(root);
+      const target = fs.realpathSync.native(root);
       assert.equal(path.dirname(target), parent);
       assert.ok(path.basename(target).startsWith('ct-cdp-stop-test-'));
       fs.rmSync(target, { recursive: true, force: true });
@@ -539,10 +540,10 @@ test(
   'compiled universal runtime accepts unlisted host versions and changed host bytes while rejecting payload tampering',
   { skip: process.platform !== 'win32' },
   (t) => {
-    const parent = fs.realpathSync(os.tmpdir()),
+    const parent = fs.realpathSync.native(os.tmpdir()),
       root = fs.mkdtempSync(path.join(parent, 'ct-cdp-plan-test-'));
     t.after(() => {
-      const target = fs.realpathSync(root);
+      const target = fs.realpathSync.native(root);
       assert.equal(path.dirname(target), parent);
       assert.ok(path.basename(target).startsWith('ct-cdp-plan-test-'));
       fs.rmSync(target, { recursive: true, force: true });
@@ -610,10 +611,10 @@ test(
   'CDP launcher verifies embedded payload hashes before executing installed PowerShell',
   { skip: process.platform !== 'win32' },
   (t) => {
-    const parent = fs.realpathSync(os.tmpdir()),
+    const parent = fs.realpathSync.native(os.tmpdir()),
       root = fs.mkdtempSync(path.join(parent, 'ct-cdp-bootstrap-test-'));
     t.after(() => {
-      const target = fs.realpathSync(root);
+      const target = fs.realpathSync.native(root);
       assert.equal(path.dirname(target), parent);
       assert.ok(path.basename(target).startsWith('ct-cdp-bootstrap-test-'));
       fs.rmSync(target, { recursive: true, force: true });
