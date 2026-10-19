@@ -1,12 +1,14 @@
 # Codex Token
 
-为 Windows Codex 桌面客户端增加逐回复用量统计，查看 Token、缓存命中率、价格参考及模型输出速度。当前版本 **0.5.2**。
+为 Windows Codex 桌面客户端增加逐回复用量统计，查看 Token、缓存命中率、价格参考及模型输出速度。当前版本 **0.5.3**。
+
+[下载 Windows 安装器](https://github.com/U109/Codex-Token/releases/latest/download/CodexToken-Setup-win-x64.exe)
 
 **非官方项目，与 OpenAI 无隶属或背书关系。** 通过本机 CDP 接口在运行时加载组件，使用普通用户权限，不复制或修改官方客户端文件。
 
 ## 界面预览
 
-在每条回复下方，复制按钮旁的用量图标会显示本轮 Token 总量。
+在每条回复下方，复制按钮旁的用量图标会显示本轮 Token 总量。达到一百万时使用 M 展示，例如 `4.41M`；点击详情可查看完整数值。
 
 ![回复操作栏中的用量图标与 Token 总量](docs/images/usage-toolbar.png)
 
@@ -31,14 +33,23 @@
 
 需要 Windows x64 和当前用户已安装的官方 Codex 桌面客户端。
 
-1. 从 [Releases](https://github.com/U109/Codex-Token/releases/latest) 页面下载 `CodexToken-Setup-win-x64.exe` 及其 `.sha256` 文件。
-2. 核对摘要后运行安装器，已有安装会自动覆盖升级。
+1. [下载 `CodexToken-Setup-win-x64.exe`](https://github.com/U109/Codex-Token/releases/latest/download/CodexToken-Setup-win-x64.exe)，安装只需要这一个文件。
+2. 运行安装器，已有安装会自动覆盖升级。
 3. 保存工作并完全退出 Codex，再通过桌面或开始菜单中的 **Codex Token** 快捷方式启动。
 4. 点击回复旁的用量图标查看详情。直接从官方入口启动时不保证加载增强。
+
+发布页的 `.sha256` 文件仅用于可选的下载完整性校验，不参与安装，可以不下载。
+
+<details>
+<summary>可选：检查下载文件是否完整</summary>
+
+`.sha256` 中保存了安装器的校验值。可用以下命令计算已下载文件的校验值，与发布页或 `.sha256` 中的值比较。
 
 ```powershell
 Get-FileHash .\CodexToken-Setup-win-x64.exe -Algorithm SHA256
 ```
+
+</details>
 
 安装器未签名。运行增强时会启用仅限 `127.0.0.1` 的随机调试端口；不要转发该端口或运行不可信调试脚本。卸载可通过 Windows 设置完成，完全退出 Codex 后调试端口才会关闭。更多说明见 [安全说明](SECURITY.md)。
 

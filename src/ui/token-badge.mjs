@@ -43,9 +43,11 @@ export function createTokenBadge(React, ActionButton = 'button') {
     Number.isSafeInteger(value) && value >= 0 ? value.toLocaleString('en-US') : '—';
   const compact = (value) =>
     Number.isSafeInteger(value) && value >= 0
-      ? value >= 1000
-        ? `${+(value / 1000).toFixed(2)}K`
-        : String(value)
+      ? value >= 1_000_000
+        ? `${+(value / 1_000_000).toFixed(2)}M`
+        : value >= 1000
+          ? `${+(value / 1000).toFixed(2)}K`
+          : String(value)
       : '—';
   // 复制图标轮廓位于 16px 画布内约 1 CSS px 处；匹配其线宽和视觉高度，竖边与像素对齐。
   const databaseGlyph = (size = '16px') =>
@@ -343,7 +345,7 @@ export function createTokenBadge(React, ActionButton = 'button') {
               compact(counts.totalTokens) + (running ? ' token' : ''),
             )
           : running
-            ? h('span', { 'data-ct-waiting': '' }, '等待上报')
+            ? h('span', { 'data-ct-waiting': '' }, '等待回复')
             : null,
       ),
       h(
@@ -428,7 +430,7 @@ export function createTokenBadge(React, ActionButton = 'button') {
           h(
             'span',
             { 'data-ct-detail-total': '', style: { fontVariantNumeric: 'tabular-nums' } },
-            hasTotal ? number(counts.totalTokens) + ' token' : running ? '等待上报' : '未记录用量',
+            hasTotal ? number(counts.totalTokens) + ' token' : running ? '等待回复' : '未记录用量',
           ),
         ),
         h(
@@ -440,7 +442,7 @@ export function createTokenBadge(React, ActionButton = 'button') {
                 data?.source?.status === 'disconnected'
                   ? '连接中断'
                   : !hasTotal
-                    ? '等待上报'
+                    ? '等待回复'
                     : partial
                       ? '运行中 · 数据不完整'
                       : '运行中',

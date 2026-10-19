@@ -169,7 +169,51 @@ test('running control shows only its exact live turn without an extra left inset
   ]) {
     const other = await render(index, different, undefined, undefined, undefined, active);
     assert.equal(byData(other, 'data-ct-total').length, 0);
-    assert.equal(byData(other, 'data-ct-waiting')[0].children[0], '等待上报');
+    assert.equal(byData(other, 'data-ct-waiting')[0].children[0], '等待回复');
+    assert.equal(byData(other, 'data-ct-detail-total')[0].children[0], '等待回复');
+  }
+});
+
+test('completed and running totals switch to M at one million while details preserve exact counts', async () => {
+  const { createMessageUsageIndex } = await import('../src/core/message-usage.mjs');
+  const index = createMessageUsageIndex([], { mode: 'app-server-reported' });
+  const liveProps = { hostId: 'local', threadId: 'A', turnId: 't1', running: true };
+  for (const [total, label] of [
+    [0, '0'],
+    [999, '999'],
+    [1000, '1K'],
+    [12340, '12.34K'],
+    [999990, '999.99K'],
+    [1000000, '1M'],
+    [1234567, '1.23M'],
+    [4409555, '4.41M'],
+  ]) {
+    const data = fixture();
+    Object.assign(data.usage.total, {
+      totalTokens: total,
+      inputTokens: total,
+      outputTokens: 0,
+      cachedInputTokens: 0,
+      reasoningOutputTokens: 0,
+    });
+    const active = [{ ...data, ...liveProps, scope: 'active-turn-reports' }];
+    const completed = await render(data);
+    const running = await render(index, liveProps, undefined, undefined, undefined, active);
+    for (const [tree, expected] of [
+      [completed, label],
+      [running, label + ' token'],
+    ]) {
+      assert.equal(byData(tree, 'data-ct-total')[0].children[0], expected);
+      assert.equal(
+        byData(tree, 'data-ct-detail-total')[0].children[0],
+        total.toLocaleString('en-US') + ' token',
+      );
+      assert.ok(
+        nodes(tree, (node) => node.tag === 'button')[0].props['aria-label'].includes(
+          total.toLocaleString('en-US') + ' token',
+        ),
+      );
+    }
   }
 });
 test('running and completed views distinguish an observed new turn from mid-turn attachment in an existing chat', async () => {
