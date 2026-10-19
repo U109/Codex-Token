@@ -1,0 +1,379 @@
+{
+  "priceVersion": "official-usd-2026-10-15",
+  "retrieval": "Direct HTTPS GET of official pages; web-search tool returned no usable result",
+  "currency": "USD",
+  "unit": "per 1M text tokens",
+  "sources": [
+    {
+      "provider": "openai",
+      "url": "https://developers.openai.com/api/docs/pricing",
+      "retrievedOn": "2026-10-15",
+      "extractedPageTextSha256": "6f55ea6136271d4f1913e39751d7f443591d6afc47285438bf78f59f0c9504c0",
+      "tables": [
+        {
+          "tableIndex": 0,
+          "heading": "Flagship models",
+          "rows": [
+            ["", "Short context", "Long context"],
+            [
+              "Model",
+              "Input",
+              "Cached input",
+              "Cache writes",
+              "Output",
+              "Input",
+              "Cached input",
+              "Cache writes",
+              "Output"
+            ],
+            [
+              "gpt-6-astra",
+              "$10.00",
+              "$1.00",
+              "$12.50",
+              "$50.00",
+              "$20.00",
+              "$2.00",
+              "$25.00",
+              "$75.00"
+            ],
+            [
+              "gpt-6.1-sol",
+              "$2.00",
+              "$0.10",
+              "$2.50",
+              "$10.00",
+              "$4.00",
+              "$0.20",
+              "$5.00",
+              "$15.00"
+            ],
+            ["gpt-6-luna", "$0.10", "$0.01", "$0.125", "$0.50", "$0.20", "$0.02", "$0.25", "$0.75"]
+          ]
+        },
+        {
+          "tableIndex": 1,
+          "heading": "Flagship models",
+          "rows": [
+            ["", "Short context", "Long context"],
+            [
+              "Model",
+              "Input",
+              "Cached input",
+              "Cache writes",
+              "Output",
+              "Input",
+              "Cached input",
+              "Cache writes",
+              "Output"
+            ],
+            [
+              "gpt-6-astra",
+              "$5.00",
+              "$0.50",
+              "$6.25",
+              "$25.00",
+              "$10.00",
+              "$1.00",
+              "$12.50",
+              "$37.50"
+            ],
+            ["gpt-6.1-sol", "$1.00", "$0.05", "$1.25", "$5.00", "$2.00", "$0.10", "$2.50", "$7.50"],
+            [
+              "gpt-6-luna",
+              "$0.05",
+              "$0.005",
+              "$0.0625",
+              "$0.25",
+              "$0.10",
+              "$0.01",
+              "$0.125",
+              "$0.375"
+            ]
+          ]
+        },
+        {
+          "tableIndex": 2,
+          "heading": "Flagship models",
+          "rows": [
+            ["", "Short context", "Long context"],
+            [
+              "Model",
+              "Input",
+              "Cached input",
+              "Cache writes",
+              "Output",
+              "Input",
+              "Cached input",
+              "Cache writes",
+              "Output"
+            ],
+            [
+              "gpt-6-astra",
+              "$5.00",
+              "$0.50",
+              "$6.25",
+              "$25.00",
+              "$10.00",
+              "$1.00",
+              "$12.50",
+              "$37.50"
+            ],
+            ["gpt-6.1-sol", "$1.00", "$0.05", "$1.25", "$5.00", "$2.00", "$0.10", "$2.50", "$7.50"],
+            [
+              "gpt-6-luna",
+              "$0.05",
+              "$0.005",
+              "$0.0625",
+              "$0.25",
+              "$0.10",
+              "$0.01",
+              "$0.125",
+              "$0.375"
+            ]
+          ]
+        },
+        {
+          "tableIndex": 3,
+          "heading": "Flagship models",
+          "rows": [
+            ["", "Short context", "Long context"],
+            [
+              "Model",
+              "Input",
+              "Cached input",
+              "Cache writes",
+              "Output",
+              "Input",
+              "Cached input",
+              "Cache writes",
+              "Output"
+            ],
+            [
+              "gpt-6-astra",
+              "$20.00",
+              "$2.00",
+              "$25.00",
+              "$100.00",
+              "$40.00",
+              "$4.00",
+              "$50.00",
+              "$150.00"
+            ],
+            [
+              "gpt-6.1-sol",
+              "$4.00",
+              "$0.20",
+              "$5.00",
+              "$20.00",
+              "$8.00",
+              "$0.40",
+              "$10.00",
+              "$30.00"
+            ],
+            ["gpt-6-luna", "$0.20", "$0.02", "$0.25", "$1.00", "$0.40", "$0.04", "$0.50", "$1.50"]
+          ]
+        },
+        {
+          "tableIndex": 4,
+          "heading": "Flagship models",
+          "rows": [
+            ["", "Short context", "Long context"],
+            [
+              "Model",
+              "Input",
+              "Cached input",
+              "Cache writes",
+              "Output",
+              "Input",
+              "Cached input",
+              "Cache writes",
+              "Output"
+            ],
+            [
+              "gpt-6-astra",
+              "$60.00",
+              "$6.00",
+              "$75.00",
+              "$300.00",
+              "$120.00",
+              "$12.00",
+              "$150.00",
+              "$450.00"
+            ],
+            [
+              "gpt-6.1-sol",
+              "$12.00",
+              "$0.60",
+              "$15.00",
+              "$60.00",
+              "$24.00",
+              "$1.20",
+              "$30.00",
+              "$90.00"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "provider": "deepseek",
+      "url": "https://api-docs.deepseek.com/quick_start/pricing",
+      "retrievedOn": "2026-10-15",
+      "extractedPageTextSha256": "b2026bbc77e852f7bc52efa88146f89d8a68b6d31f11b9136d1e5913edce2744",
+      "tables": [
+        {
+          "tableIndex": 0,
+          "heading": "Model Details ​",
+          "rows": [
+            ["MODEL", "deepseek-flash (1)", "deepseek-v4-pro"],
+            ["MODEL VERSION", "DeepSeek-V4.1-Flash", "DeepSeek-V4-Pro-0813"],
+            ["PRICING (2)", "1M INPUT TOKENS (CACHE HIT)", "OFF-PEAK", "$0.003", "$0.022"],
+            ["PEAK", "$0.006", "$0.044"],
+            ["1M INPUT TOKENS (CACHE MISS)", "OFF-PEAK", "$0.15", "$0.66"],
+            ["PEAK", "$0.3", "$1.32"],
+            ["1M OUTPUT TOKENS", "OFF-PEAK", "$0.6", "$1.98"],
+            ["PEAK", "$1.2", "$3.96"]
+          ]
+        }
+      ]
+    },
+    {
+      "provider": "gemini",
+      "url": "https://ai.google.dev/gemini-api/docs/pricing",
+      "retrievedOn": "2026-10-15",
+      "extractedPageTextSha256": "6684904103859d06505c3eebbee3a60604adff379f6caf7e9fa9d0c78cc024cb",
+      "tables": [
+        {
+          "tableIndex": 0,
+          "heading": "Standard",
+          "rows": [
+            ["", "Free Tier", "Paid Tier, per 1M tokens in USD"],
+            [
+              "Input price",
+              "Not available",
+              "$2.00 through November 30, 2026. $4.00 starting December 1, 2026."
+            ],
+            [
+              "Output price (including thinking tokens)",
+              "Not available",
+              "$10.00 through November 30, 2026. $20.00 starting December 1, 2026."
+            ],
+            [
+              "Context caching price",
+              "Not available",
+              "$0.10 through November 30, 2026. $0.20 starting December 1, 2026. Implicit caching only (explicit caching is not supported)."
+            ]
+          ],
+          "model": "gemini-4-argon"
+        },
+        {
+          "tableIndex": 3,
+          "heading": "Priority",
+          "rows": [
+            ["", "Free Tier", "Paid Tier, per 1M tokens in USD"],
+            [
+              "Input price",
+              "Not available",
+              "$3.60 through November 30, 2026. $7.20 starting December 1, 2026."
+            ],
+            [
+              "Output price (including thinking tokens)",
+              "Not available",
+              "$18.00 through November 30, 2026. $36.00 starting December 1, 2026."
+            ],
+            [
+              "Context caching price",
+              "Not available",
+              "$0.18 through November 30, 2026. $0.36 starting December 1, 2026. Implicit caching only (explicit caching is not supported)."
+            ]
+          ],
+          "model": "gemini-4-argon"
+        },
+        {
+          "tableIndex": 10,
+          "heading": "Standard",
+          "rows": [
+            ["", "Free Tier", "Paid Tier, per 1M tokens in USD"],
+            [
+              "Input price",
+              "Free of charge",
+              "$0.75 through December 31, 2026. $1.50 starting January 1, 2027."
+            ],
+            [
+              "Output price (including thinking tokens)",
+              "Free of charge",
+              "$3.75 through December 31, 2026. $7.50 starting January 1, 2027."
+            ],
+            [
+              "Context caching price",
+              "Free of charge",
+              "$0.075 through December 31, 2026. $0.15 starting January 1, 2027. $0.50 / 1,000,000 tokens per hour (storage price) through December 31, 2026. $1.00 / 1,000,000 tokens per hour (storage price) starting January 1, 2027."
+            ]
+          ],
+          "model": "gemini-3.8-flash"
+        },
+        {
+          "tableIndex": 13,
+          "heading": "Priority",
+          "rows": [
+            ["", "Free Tier", "Paid Tier, per 1M tokens in USD"],
+            [
+              "Input price",
+              "Free of charge",
+              "$1.35 through December 31, 2026. $2.70 starting January 1, 2027."
+            ],
+            [
+              "Output price (including thinking tokens)",
+              "Free of charge",
+              "$6.75 through December 31, 2026. $13.50 starting January 1, 2027."
+            ],
+            [
+              "Context caching price",
+              "Free of charge",
+              "$0.135 through December 31, 2026. $0.27 starting January 1, 2027. $0.50 / 1,000,000 tokens per hour (storage price) through December 31, 2026. $1.00 / 1,000,000 tokens per hour (storage price) starting January 1, 2027."
+            ]
+          ],
+          "model": "gemini-3.8-flash"
+        },
+        {
+          "tableIndex": 58,
+          "heading": "Standard",
+          "rows": [
+            ["", "Free Tier", "Paid Tier, per 1M tokens in USD"],
+            [
+              "Input price",
+              "Free of charge",
+              "$1.25, prompts < = 200k tokens $2.50, prompts > 200k tokens"
+            ],
+            [
+              "Output price (including thinking tokens)",
+              "Free of charge",
+              "$10.00, prompts < = 200k tokens $15.00, prompts > 200k"
+            ],
+            [
+              "Context caching price",
+              "Not available",
+              "$0.125, prompts < = 200k tokens $0.25, prompts > 200k $4.50 / 1,000,000 tokens per hour (storage price)"
+            ]
+          ],
+          "model": "gemini-2.5-pro"
+        }
+      ]
+    }
+  ],
+  "modelRules": {
+    "openaiThreshold": {
+      "tokens": 272000,
+      "condition": ">",
+      "pages": [
+        "https://developers.openai.com/api/docs/models/gpt-6-astra",
+        "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+        "https://developers.openai.com/api/docs/models/gpt-6-luna"
+      ]
+    },
+    "deepseekPeriod": "Require explicit peak/off-peak; official schedule depends on Chinese public holidays as well as UTC weekday/time. Never inferred from the viewer clock.",
+    "googleTransitions": "Dates listed without a confirmed timezone; refuse estimates within 24h either side of a listed transition.",
+    "excluded": "tools, cache storage, taxes, regional/FedRAMP surcharges, subscription credits, audio/image/video token billing, custom proxy markups"
+  }
+}

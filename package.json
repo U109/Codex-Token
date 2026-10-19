@@ -1,0 +1,24 @@
+{
+  "name": "codex-token",
+  "version": "0.5.1",
+  "private": true,
+  "description": "Unofficial Windows runtime enhancement showing Codex token usage, cache hit rates, reference costs, and model output speed",
+  "license": "MIT",
+  "scripts": {
+    "format": "node scripts/format.cjs",
+    "format:check": "node scripts/format.cjs --check",
+    "check": "node scripts/check.cjs",
+    "test": "node --test test/*.test.cjs",
+    "build": "python scripts/build.py",
+    "build:release": "npm run build",
+    "build:icon": "node scripts/build-icon.cjs",
+    "test:release": "node scripts/verify-release.cjs",
+    "test:install": "node scripts/verify-install.cjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "prettier": "3.9.10"
+  }
+}

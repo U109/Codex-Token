@@ -1,0 +1,9 @@
+.artifacts/
+.venv/
+node_modules/
+dist/
+validation/
+lab/
+prototype/
+release/
+.idea/

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" fill="none">
+  <title>Codex Token</title>
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="#17251F" />
+  <rect x="9" y="9" width="238" height="238" rx="55" stroke="#32483D" stroke-width="2" />
+  <path d="M64 80V176C64 189.25 92.65 200 128 200S192 189.25 192 176V80H64Z" fill="#8DE8C6" />
+  <ellipse cx="128" cy="80" rx="64" ry="24" fill="#8DE8C6" />
+  <path
+    d="M64 80C64 93.25 92.65 104 128 104S192 93.25 192 80M64 128C64 141.25 92.65 152 128 152S192 141.25 192 128"
+    stroke="#17251F"
+    stroke-width="12"
+  />
+</svg>

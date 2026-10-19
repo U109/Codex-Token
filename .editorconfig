@@ -1,0 +1,16 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+[*.{py,cs,ps1,psd1}]
+indent_size = 4
+
+# Windows PowerShell 5.1 需要 BOM 才会按 UTF-8 正确解析中文字符串。
+[*.ps1]
+charset = utf-8-bom

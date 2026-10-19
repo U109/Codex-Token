@@ -1,0 +1,11 @@
+node_modules/
+.venv/
+.artifacts/
+dist/
+validation/
+lab/
+prototype/
+release/
+.idea/
+__pycache__/
+package-lock.json

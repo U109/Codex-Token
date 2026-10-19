@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - run: npm ci
+      - run: python -m venv .venv
+      - if: runner.os != 'Windows'
+        run: .venv/bin/python -m pip install -r requirements-dev.txt
+      - if: runner.os == 'Windows'
+        run: .venv/Scripts/python.exe -m pip install -r requirements-dev.txt
+      - run: dotnet tool restore
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path .artifacts/tools -Force | Out-Null
+          Save-Module -Name PSScriptAnalyzer -RequiredVersion 1.25.0 -Path .artifacts/tools -Repository PSGallery -Force
+      - run: npm run format:check
+      - run: npm run check
+      - if: runner.os != 'Windows'
+        run: npm test
+      - if: runner.os == 'Windows'
+        run: npm run build
+      - if: runner.os == 'Windows'
+        run: npm run test:release
+      - if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-token-windows-x64
+          path: |
+            dist/CodexToken-Setup-win-x64.exe
+            dist/CodexToken-Setup-win-x64.exe.sha256
+          if-no-files-found: error

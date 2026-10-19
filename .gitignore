@@ -1,0 +1,25 @@
+# 构建结果和验证证据只保留在本机，通过 GitHub Releases 分发安装包。
+/dist/
+/.artifacts/
+
+# 本机历史实验及报告目录，不属于开源源码。
+/lab/
+/prototype/
+/release/
+/validation/
+
+node_modules/
+.venv/
+__pycache__/
+*.py[cod]
+*.log
+*.tmp
+*.bak
+.env
+.env.*
+!.env.example
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+Desktop.ini
