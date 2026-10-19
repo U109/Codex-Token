@@ -58,11 +58,11 @@ npm run format:check
 ## 生成文件
 
 - `dist/CodexToken-Setup-win-x64.exe`：可分发安装器。
-- `dist/CodexToken-Setup-win-x64.exe.sha256`：安装器摘要。
+- `dist/CodexToken-Setup-win-x64.exe.sha256`：仅供本地验证的安装器摘要，不上传发布页。
 - `dist/build-report.json`：含本机构建路径和来源摘要的本地报告。
 - `.artifacts/`：本次构建的载荷、测试输出、图标检查及可选烟测报告。
 
-这些目录均被 Git 忽略。只通过 GitHub Releases 分发安装器与摘要，不上传本机报告或官方客户端副本。
+这些目录均被 Git 忽略。GitHub Releases 和 CI 下载产物仅提供安装器 EXE，不上传本机校验文件、报告或官方客户端副本。
 
 ## 图标维护
 

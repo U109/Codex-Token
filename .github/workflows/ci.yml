@@ -50,7 +50,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: codex-token-windows-x64
-          path: |
-            dist/CodexToken-Setup-win-x64.exe
-            dist/CodexToken-Setup-win-x64.exe.sha256
+          path: dist/CodexToken-Setup-win-x64.exe
           if-no-files-found: error
