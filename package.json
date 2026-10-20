@@ -1,6 +1,6 @@
 {
   "name": "codex-token",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "private": true,
   "description": "Unofficial Windows runtime enhancement showing Codex token usage, cache hit rates, reference costs, and model output speed",
   "license": "MIT",

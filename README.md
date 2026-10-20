@@ -1,6 +1,6 @@
 # Codex Token
 
-为 Windows Codex 桌面客户端增加会话与逐回复用量统计，查看 Token、缓存命中率、价格参考及模型输出速度。当前版本 **0.5.3**。
+为 Windows Codex 桌面客户端增加会话与逐回复用量统计，查看 Token、缓存命中率、价格参考及模型输出速度。当前版本 **0.5.4**。
 
 [下载 Windows 安装器](https://github.com/U109/Codex-Token/releases/latest/download/CodexToken-Setup-win-x64.exe)
 
