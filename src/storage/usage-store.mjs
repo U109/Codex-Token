@@ -16,6 +16,7 @@ export function createUsageStore({
   mode = 'app-server-reported',
   onUpdate = () => {},
   onActiveUpdate = () => {},
+  onConversationUpdate = () => {},
   getConfiguredModel,
   now,
 } = {}) {
@@ -23,7 +24,14 @@ export function createUsageStore({
   let index = createMessageUsageIndex([], { mode });
   let state = 'ready',
     writable = true,
-    diagnostic = null;
+    diagnostic = null,
+    storageReason = null;
+  const failureReason = (error) =>
+    error?.name === 'QuotaExceededError' || error?.code === 22
+      ? 'quota'
+      : error?.name === 'SecurityError'
+        ? 'denied'
+        : 'unavailable';
   try {
     if (!storage?.getItem || !storage?.setItem) throw new Error('Storage unavailable');
     const saved = storage.getItem(storageKey);
@@ -35,21 +43,30 @@ export function createUsageStore({
         // 保留损坏文档以便主动恢复，不能用空文件覆盖仍可能恢复的历史记录。
         index = createMessageUsageIndex([], { mode });
         state = 'corrupt';
+        storageReason = 'corrupt';
         writable = false;
       }
     }
-  } catch {
+  } catch (error) {
     state = 'unavailable';
+    storageReason = failureReason(error);
   }
   const health = () =>
-    Object.freeze({ state, diagnostic, records: collector.getIndex().records.length });
+    Object.freeze({
+      state,
+      diagnostic,
+      storageReason,
+      records: collector.getIndex().records.length,
+    });
   const notify = (current) => {
     if (writable) {
       try {
-        storage.setItem(storageKey, serializeMessageUsage(current));
+        storage.setItem(storageKey, serializeMessageUsage(current, { compact: true }));
         state = 'ready';
-      } catch {
+        storageReason = null;
+      } catch (error) {
         state = 'unavailable';
+        storageReason = failureReason(error);
       }
     }
     try {
@@ -64,6 +81,7 @@ export function createUsageStore({
     onChange: notify,
     getConfiguredModel,
     now,
+    onConversationChange: onConversationUpdate,
     onActiveChange: (active) => {
       try {
         onActiveUpdate(active);
@@ -77,6 +95,8 @@ export function createUsageStore({
     storageKey,
     getIndex: collector.getIndex,
     getActive: collector.getActive,
+    getConversations: collector.getConversations,
+    observeConversations: collector.observeConversations,
     getHealth: health,
     ingest: collector.ingest,
     ingestLocalRecords: collector.ingestLocalRecords,

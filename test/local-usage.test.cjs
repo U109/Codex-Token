@@ -114,6 +114,53 @@ test('notification first is upgraded with exact local identity without a second 
   assert.equal(f.get().requestReports[0].responseId, 'r1');
 });
 
+test('replaying a known response can enrich its historical model without recounting or retiming it', async () => {
+  const f = await fixture();
+  f.start();
+  f.clock(1000);
+  f.disk([local('r1')]);
+  const measured = f.active().modelTiming;
+  f.clock(5000);
+  const enriched = local('r1', a, a, a, {
+    replay: true,
+    model: { id: 'gpt-6.1-sol', basis: 'turn-context', secret: 'PRIVATE_SECRET' },
+  });
+  f.disk([enriched]);
+  f.disk([enriched]);
+  f.report();
+  assert.equal(f.active().source.requestCount, 1);
+  assert.deepEqual(f.active().usage.total, a);
+  assert.deepEqual(f.active().modelTiming, measured);
+  assert.deepEqual(f.active().requestReports[0].model, {
+    id: 'gpt-6.1-sol',
+    basis: 'turn-context',
+  });
+  f.finish();
+  assert.doesNotMatch(f.schema.serializeMessageUsage(f.collector.getIndex()), /PRIVATE_SECRET/);
+});
+
+test('an explicit routed model takes precedence over recorded turn configuration in either arrival order', async () => {
+  for (const notificationFirst of [false, true]) {
+    const f = await fixture();
+    f.start();
+    f.collector.ingest({
+      hostId: 'local',
+      method: 'model/rerouted',
+      params: { threadId: 'A', turnId: 't1', toModel: 'gpt-6-astra' },
+    });
+    if (notificationFirst) f.report();
+    f.disk([local('r1', a, a, a, { model: { id: 'gpt-6.1-sol', basis: 'turn-context' } })]);
+    if (!notificationFirst) f.report();
+    assert.deepEqual(f.active().requestReports[0].model, { id: 'gpt-6-astra', basis: 'reported' });
+    assert.equal(f.active().source.requestCount, 1);
+    f.disk([
+      local('r1', a, a, a, { replay: true, model: { id: 'gpt-6.1-sol', basis: 'turn-context' } }),
+    ]);
+    f.finish();
+    assert.deepEqual(f.get().requestReports[0].model, { id: 'gpt-6-astra', basis: 'reported' });
+  }
+});
+
 test('equal-sized requests stay distinct, including zero-token response IDs', async () => {
   const f = await fixture();
   f.start();

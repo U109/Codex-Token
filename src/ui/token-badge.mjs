@@ -498,7 +498,14 @@ export function createTokenBadge(React, ActionButton = 'button') {
           ),
           detailRow(speedName, h('span', { 'data-ct-speed': '', title: speedHint }, speedLabel)),
           health && health.state !== 'ready'
-            ? detailRow('记录保存', '当前无法持久化，重启后可能丢失')
+            ? detailRow(
+                '记录保存',
+                health.storageReason === 'quota'
+                  ? '存储空间不足，新增记录尚未保存'
+                  : health.state === 'corrupt'
+                    ? '历史记录损坏，已保留原数据'
+                    : '当前无法持久化，重启后可能丢失',
+              )
             : null,
         ),
       ),

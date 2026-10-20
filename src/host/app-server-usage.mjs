@@ -6,6 +6,7 @@ import {
   mergeMessageUsage,
 } from '../core/message-usage.mjs';
 import { createModelRequestTimer } from '../core/model-timing.mjs';
+import { summarizeConversation } from '../core/conversation-usage.mjs';
 
 import {
   USAGE_FIELDS,
@@ -16,6 +17,7 @@ import {
   emptyUsage,
   cleanLocalUsage,
   mergeRequest,
+  mergeRequestModel,
   sumRequests,
   completeLocalRequests,
   reconcileLocalPrefix,
@@ -58,6 +60,7 @@ export function createAppServerUsageCollector({
   index = createMessageUsageIndex([], { mode }),
   onChange = () => {},
   onActiveChange = () => {},
+  onConversationChange = () => {},
   getConfiguredModel = () => null,
   onDiagnostic = () => {},
   maxActiveTurns = 1000,
@@ -79,8 +82,26 @@ export function createAppServerUsageCollector({
     indexDirty = false;
   const localTurns = new Map(),
     watchedThreads = new Map(),
-    localResponses = new Map();
+    localResponses = new Map(),
+    localHistoryDirty = new Set();
   let localBindings = new Map();
+  let conversationBindings = new Map(),
+    conversations = Object.freeze([]);
+  const publishConversations = () => {
+    const next = [...conversationBindings.values()].map((identity) =>
+      summarizeConversation({
+        ...identity,
+        index: current,
+        active,
+        localTurns: [...localTurns.values()],
+      }),
+    );
+    if (JSON.stringify(next) === JSON.stringify(conversations)) return;
+    conversations = Object.freeze(next);
+    try {
+      onConversationChange(conversations);
+    } catch {}
+  };
   const notifyIndex = () => {
     if (batch) {
       indexDirty = true;
@@ -91,6 +112,7 @@ export function createAppServerUsageCollector({
     } catch {
       diagnose('persistence-unavailable');
     }
+    publishConversations();
   };
   const watch = (threadId, replay = false) => {
     const revision = watchedThreads.get(threadId) ?? 0;
@@ -217,6 +239,7 @@ export function createAppServerUsageCollector({
     } catch {
       /* 界面渲染失败不能影响宿主处理。 */
     }
+    publishConversations();
   };
   const publish = (turn) => {
     const complete =
@@ -407,6 +430,7 @@ export function createAppServerUsageCollector({
     const turn = turns.get(name);
     if (
       !turn &&
+      !watchedThreads.has(clean.threadId) &&
       !localTurns.has(name) &&
       !localBindings.has(name) &&
       !current.records.some(
@@ -430,7 +454,10 @@ export function createAppServerUsageCollector({
       responseId: clean.responseId,
       checkpoint: clean.checkpoint,
       usage: Object.freeze(clean.usage),
-      model: Object.freeze({ ...(!clean.replay && turn ? (turn.pendingModel ?? turn.model) : {}) }),
+      model: mergeRequestModel(
+        !clean.replay && turn ? (turn.pendingModel ?? turn.model) : {},
+        clean.model,
+      ),
     };
     const result = mergeRequest(state.reports, report);
     if (!result.reports) {
@@ -454,14 +481,35 @@ export function createAppServerUsageCollector({
       if (applied.added && !clean.replay) turn.pendingModel = null;
       return applied;
     }
-    publishLocalHistory(state);
+    if (batch) localHistoryDirty.add(state);
+    else publishLocalHistory(state);
     return { status: result.status };
   };
   return {
+    getConversations: () => conversations,
+    observeConversations(identities) {
+      if (!Array.isArray(identities) || identities.length > 128) return;
+      const next = new Map();
+      for (const identity of identities) {
+        if (!id(identity?.hostId) || !id(identity?.threadId)) continue;
+        const value = { hostId: identity.hostId, threadId: identity.threadId };
+        next.set(key(value.hostId, value.threadId), value);
+        if (
+          value.hostId === 'local' &&
+          !conversationBindings.has(key(value.hostId, value.threadId))
+        )
+          watch(value.threadId, true);
+      }
+      conversationBindings = next;
+      publishConversations();
+    },
     getLocalUsageTargets() {
       if (mode !== 'app-server-reported') return [];
       const threads = [
         ...new Set([
+          ...[...conversationBindings.values()]
+            .filter((identity) => identity.hostId === 'local')
+            .map((identity) => identity.threadId),
           ...[...turns.values()]
             .filter((turn) => turn.hostId === 'local')
             .map((turn) => turn.threadId),
@@ -538,19 +586,28 @@ export function createAppServerUsageCollector({
               state.caughtUp = true;
               try {
                 reconcileActiveLocal(state);
-                publishLocalHistory(state);
+                localHistoryDirty.add(state);
               } catch {
                 diagnose('local-record-capacity-or-identity-conflict');
               }
             }
         }
       } finally {
+        // 同一批中的历史回合只构建一次消息快照，避免补全模型时逐请求重复清洗整个索引。
+        for (const state of localHistoryDirty) {
+          try {
+            publishLocalHistory(state);
+          } catch {
+            diagnose('local-record-capacity-or-identity-conflict');
+          }
+        }
+        localHistoryDirty.clear();
         batch = false;
         if (indexDirty) {
           indexDirty = false;
           notifyIndex();
         }
-        if (activeDirty || caughtUp.length) {
+        if (activeDirty || caughtUp.length || records.length) {
           activeDirty = false;
           publishActive();
         }

@@ -1,6 +1,7 @@
 /** 宿主挂载入口：复用原生 React，管理被动通知、消息身份、重挂载和完整清理。 */
 import { createDesktopBridge } from './desktop-bridge.mjs';
 import { createTokenBadge } from '../ui/token-badge.mjs';
+import { createConversationBar } from '../ui/conversation-bar.mjs';
 import { createModelMetadataBridge } from './model-metadata.mjs';
 import { discoverHostConfig } from './cdp-discovery.mjs';
 
@@ -57,6 +58,25 @@ export function runningIdentityForNode(node) {
     )
       return null;
     return { hostId, threadId, turnId, running: true };
+  }
+  return null;
+}
+
+/** 输入框只采用宿主明确的 host/conversation 绑定；新建首页没有身份时不借用上一个聊天。 */
+export function composerIdentityForNode(node) {
+  let threadId = null;
+  for (
+    let fiber = currentFiber(node), i = 0;
+    fiber && i < MAX_FIBER_DEPTH;
+    i++, fiber = fiber.return
+  ) {
+    const props = fiber.memoizedProps;
+    if (props?.conversationId === undefined) continue;
+    if (!validId(props.conversationId) || (threadId && threadId !== props.conversationId))
+      return null;
+    threadId = props.conversationId;
+    if (props.hostId !== undefined)
+      return validId(props.hostId) ? { hostId: props.hostId, threadId } : null;
   }
   return null;
 }
@@ -215,6 +235,8 @@ export async function installCdpRuntime(config, dependencies = {}) {
   const previous = target[GLOBAL];
   if (
     previous?.version === config.releaseVersion &&
+    previous.features?.includes('conversation-summary-v1') &&
+    previous.features?.includes('historical-models-v1') &&
     typeof previous.exchangeLocalUsage === 'function' &&
     ['ready', 'loading'].includes(previous.state)
   )
@@ -227,6 +249,7 @@ export async function installCdpRuntime(config, dependencies = {}) {
     bridge = null,
     modelBridge = null;
   const roots = new Map();
+  const composerRoots = new Map();
   const localSession = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
   const status = {
     version: config.releaseVersion,
@@ -241,7 +264,7 @@ export async function installCdpRuntime(config, dependencies = {}) {
   };
   const health = () => ({
     ...status,
-    mounted: roots.size,
+    mounted: roots.size + composerRoots.size,
     modelMetadata: modelBridge?.getHealth() ?? null,
   });
   const disposeRoot = (row, entry) => {
@@ -262,6 +285,8 @@ export async function installCdpRuntime(config, dependencies = {}) {
     bridge?.dispose();
     for (const [row, entry] of roots) disposeRoot(row, entry);
     roots.clear();
+    for (const [row, entry] of composerRoots) disposeRoot(row, entry);
+    composerRoots.clear();
     modelBridge?.dispose();
     status.state = 'disposed';
   };
@@ -294,7 +319,7 @@ export async function installCdpRuntime(config, dependencies = {}) {
       /* 畸形事件不能中断宿主订阅方。 */
     }
   };
-  let React, createRoot, Badge, ScopedBadge, MetadataBoundary, scopeBrand;
+  let React, createRoot, Badge, ConversationBar, ScopedBadge, MetadataBoundary, scopeBrand;
   const scan = () => {
     timer = null;
     if (stopped) return;
@@ -395,6 +420,45 @@ export async function installCdpRuntime(config, dependencies = {}) {
       }
     }
     bridge?.observeLocalIdentities(localIdentities);
+    const composers = new Map();
+    for (const body of doc.querySelectorAll(config.composerSelector ?? '[data-composer-body]')) {
+      if (body.closest?.(`[${OWNER}]`)) continue;
+      const anchor = body.closest?.('[data-composer-surface-variant]');
+      const identity = anchor && composerIdentityForNode(body);
+      if (identity && anchor.parentElement?.insertBefore) composers.set(anchor, identity);
+    }
+    bridge?.observeConversations([...composers.values()]);
+    for (const [anchor, identity] of composers) {
+      let entry = composerRoots.get(anchor);
+      if (entry && entry.container.parentElement !== anchor.parentElement) {
+        disposeRoot(anchor, entry);
+        composerRoots.delete(anchor);
+        entry = null;
+      }
+      if (!entry) {
+        const container = doc.createElement('div');
+        container.setAttribute(OWNER, '');
+        container.style.minWidth = '0';
+        entry = {
+          container,
+          root: createRoot(container, { identifierPrefix: 'ct-session-' }),
+          identityKey: null,
+        };
+        composerRoots.set(anchor, entry);
+      }
+      if (entry.container.nextSibling !== anchor)
+        anchor.parentElement.insertBefore(entry.container, anchor);
+      const identityKey = JSON.stringify(identity);
+      if (entry.identityKey !== identityKey) {
+        entry.root.render(React.createElement(ConversationBar, { ...identity, key: identityKey }));
+        entry.identityKey = identityKey;
+      }
+    }
+    for (const [anchor, entry] of composerRoots)
+      if (!composers.has(anchor)) {
+        disposeRoot(anchor, entry);
+        composerRoots.delete(anchor);
+      }
     status.state = 'ready';
   };
   const schedule = () => {
@@ -415,6 +479,7 @@ export async function installCdpRuntime(config, dependencies = {}) {
   };
   target[GLOBAL] = {
     version: config.releaseVersion,
+    features: ['conversation-summary-v1', 'historical-models-v1'],
     get state() {
       return status.state;
     },
@@ -464,6 +529,7 @@ export async function installCdpRuntime(config, dependencies = {}) {
     }
     bridge = createDesktopBridge({ mode: 'app-server-reported', storage, target });
     Badge = createTokenBadge(React);
+    ConversationBar = createConversationBar(React, target);
     modelBridge = createModelMetadataBridge(target);
     if (dependencies.metadataRuntime || config.modelMetadataModuleUrl) {
       try {

@@ -44,6 +44,12 @@ export function createDesktopBridge({ mode, storage, target }) {
     mode,
     onUpdate: publish,
     onActiveUpdate: publishActive,
+    onConversationUpdate(conversations) {
+      target.__ctTokenConversationUsage = conversations;
+      try {
+        target.dispatchEvent?.(new Event('ct-token-conversation-usage'));
+      } catch {}
+    },
     getConfiguredModel: (hostId, threadId) =>
       target.__ctTokenModelMetadata?.threads?.[JSON.stringify([hostId, threadId])],
   });
@@ -82,6 +88,7 @@ export function createDesktopBridge({ mode, storage, target }) {
     ingestLocalRecords: store.ingestLocalRecords,
     observeLocalIdentities: store.observeLocalIdentities,
     getLocalUsageTargets: store.getLocalUsageTargets,
+    observeConversations: store.observeConversations,
     seedIndex,
     getHealth: store.getHealth,
     dispose() {
@@ -89,6 +96,10 @@ export function createDesktopBridge({ mode, storage, target }) {
       target.removeEventListener?.('ct-token-seed', onSeed);
       target.removeEventListener?.('ct-token-model-metadata', onModelChange);
       publishActive(Object.freeze([]));
+      target.__ctTokenConversationUsage = Object.freeze([]);
+      try {
+        target.dispatchEvent?.(new Event('ct-token-conversation-usage'));
+      } catch {}
     },
   };
 }

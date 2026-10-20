@@ -67,6 +67,161 @@ internal static class UsageLogReaderTest
         return Path.Combine(folder, "rollout-" + stamp + "-" + thread + ".jsonl");
     }
 
+    private static string Context(string turn, string model)
+    {
+        return Json.Serialize(
+                new
+                {
+                    type = "turn_context",
+                    payload = new
+                    {
+                        turn_id = turn,
+                        model = model,
+                        cwd = "PRIVATE_WORKSPACE",
+                        summary = "PRIVATE_BODY",
+                        credentials = "PRIVATE_KEY",
+                    },
+                }
+            ) + "\n";
+    }
+
+    private static string Model(object row)
+    {
+        object raw;
+        var map = Map(row);
+        if (!map.TryGetValue("model", out raw) || raw == null)
+            return null;
+        var model = raw as Dictionary<string, object>;
+        Check((string)model["basis"] == "turn-context", "context-model-provenance");
+        return (string)model["id"];
+    }
+
+    private static object VerifyModels(string home)
+    {
+        string folder = Path.Combine(home, "sessions", "2026", "10", "20");
+        string file = Rollout(folder);
+        File.WriteAllText(
+            file,
+            Context("turn-1", "gpt-6.1-sol")
+                + Row("model-first", 1)
+                + Row("other-turn", 1).Replace("turn-1", "turn-2")
+                + "{\"type\":\"event_msg\",\"payload\":{\"type\":\"turn_context\",\"turn_id\":\"turn-2\",\"model\":\"gpt-6-astra\"}}\n"
+                + Row("nested-fake", 2).Replace("turn-1", "turn-2")
+                + Row("before-context", 1).Replace("turn-1", "turn-3")
+                + Context("turn-3", "gpt-6-astra")
+                + Row("after-context", 2).Replace("turn-1", "turn-3")
+                + Context("turn-1", "gpt-6-astra")
+                + Row("model-changed", 2),
+            new UTF8Encoding(false)
+        );
+        using (var reader = new UsageLogReader(home))
+        {
+            Targets(reader);
+            var rows = Read(reader, 6);
+            Check(rows.Length == 6, "model-fixture-record-count");
+            var first = rows.Single(row => Response(row) == "model-first");
+            Check(Model(first) == "gpt-6.1-sol", "exact-recorded-model");
+            Check(
+                Model(rows.Single(row => Response(row) == "other-turn")) == null,
+                "no-other-turn-model"
+            );
+            Check(
+                Model(rows.Single(row => Response(row) == "nested-fake")) == null,
+                "nested-context-not-metadata"
+            );
+            Check(
+                Model(rows.Single(row => Response(row) == "before-context")) == null,
+                "no-future-context-model"
+            );
+            Check(
+                Model(rows.Single(row => Response(row) == "after-context")) == "gpt-6-astra",
+                "later-context-applies-forward"
+            );
+            Check(
+                Model(rows.Single(row => Response(row) == "model-changed")) == "gpt-6-astra",
+                "midturn-config-change"
+            );
+            Check(Model(first) == "gpt-6.1-sol", "earlier-request-model-frozen");
+            Check(!Json.Serialize(rows).Contains("PRIVATE_"), "context-fields-not-forwarded");
+            Drain(reader);
+            Append(
+                file,
+                Context("turn-1", "PRIVATE invalid model")
+                    + Row("invalid-model", 3)
+                    + Context("turn-1", null)
+                    + Row("missing-model", 4)
+                    + Context("turn-1", "gpt-6.1-sol")
+                    + Row("known-again", 5)
+            );
+            rows = Read(reader, 3);
+            Check(
+                Model(rows.Single(row => Response(row) == "invalid-model")) == null,
+                "invalid-context-clears-model"
+            );
+            Check(
+                Model(rows.Single(row => Response(row) == "missing-model")) == null,
+                "missing-context-model-unknown"
+            );
+            Check(
+                Model(rows.Single(row => Response(row) == "known-again")) == "gpt-6.1-sol",
+                "valid-context-restores-model"
+            );
+            Drain(reader);
+            string other = Rollout(folder, Other);
+            File.WriteAllText(
+                other,
+                Context("turn-1", "gpt-6-luna") + Row("other-file", 1, Other),
+                new UTF8Encoding(false)
+            );
+            Targets(reader, 0, true);
+            rows = Read(reader);
+            Check(
+                rows.Any(row => Response(row) == "other-file" && Model(row) == "gpt-6-luna"),
+                "other-thread-own-context"
+            );
+            Drain(reader);
+            Append(file, Row("original-file", 6));
+            rows = Read(reader);
+            Check(
+                Model(rows.Single(row => Response(row) == "original-file")) == "gpt-6.1-sol",
+                "file-context-isolated"
+            );
+            Drain(reader);
+            for (int i = 7; i <= 136; i++)
+                Append(file, Row("model-bulk-" + i, i));
+            rows = Read(reader, 128);
+            Check(
+                rows.Length == 128 && rows.All(row => Model(row) == "gpt-6.1-sol"),
+                "context-retained-first-batch"
+            );
+            reader.Acknowledge();
+            rows = Read(reader, 2);
+            Check(
+                rows.Length == 2 && rows.All(row => Model(row) == "gpt-6.1-sol"),
+                "context-retained-next-batch"
+            );
+            Drain(reader);
+            File.WriteAllText(file, Row("context-rewritten", 1), new UTF8Encoding(false));
+            rows = Read(reader);
+            Check(
+                Model(rows.Single(row => Response(row) == "context-rewritten")) == null,
+                "rewrite-clears-old-context"
+            );
+            Drain(reader);
+            Append(file, Context("turn-1", "gpt-6-astra") + Row("before-replace", 2));
+            Read(reader);
+            Drain(reader);
+            File.Move(file, Path.Combine(home, "old-context.log"));
+            File.WriteAllText(file, Row("context-replaced", 1), new UTF8Encoding(false));
+            rows = Read(reader);
+            Check(
+                Model(rows.Single(row => Response(row) == "context-replaced")) == null,
+                "replace-clears-old-context"
+            );
+            return first;
+        }
+    }
+
     private static void Targets(UsageLogReader reader, long revision = 0, bool other = false)
     {
         reader.SetTargets(
@@ -121,6 +276,7 @@ internal static class UsageLogReaderTest
         try
         {
             string home = Path.GetFullPath(args[0]);
+            object modelSample = VerifyModels(Path.Combine(home, "model-fixture"));
             string folder = Path.Combine(home, "sessions", "2026", "10", "20");
             string file = Rollout(folder);
             Directory.CreateDirectory(home);
@@ -301,6 +457,7 @@ internal static class UsageLogReaderTest
                             passed = true,
                             assertions = assertions,
                             sample = rows.First(),
+                            modelSample = modelSample,
                             health = reader.Health(),
                         }
                     )

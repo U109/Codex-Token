@@ -122,3 +122,77 @@ test('storage denial or quota errors are explicit while in-memory records remain
     assert.equal(store.getIndex().records.length, 1);
   }
 });
+
+test('shared history preserves every message binding and fits when repeated pretty snapshots exceed quota', async () => {
+  const [{ createUsageStore }, schema] = await api,
+    mode = 'app-server-reported';
+  const usage = {
+    totalTokens: 120,
+    inputTokens: 100,
+    outputTokens: 20,
+    cachedInputTokens: 0,
+    cacheWriteInputTokens: 0,
+    reasoningOutputTokens: 0,
+  };
+  const reports = Array.from({ length: 40 }, (_, i) => ({
+    sequence: i + 1,
+    usage,
+    model: { id: 'gpt-6.1-sol' },
+  }));
+  const records = Array.from({ length: 12 }, (_, i) => ({
+    ...record(mode, 'A', 't1', 'message-' + i),
+    requestReports: reports,
+    source: { requestCount: 40, status: 'completed' },
+  }));
+  const index = schema.createMessageUsageIndex(records, { mode });
+  const compact = schema.serializeMessageUsage(index, { compact: true });
+  const pretty = schema.serializeMessageUsage(index);
+  assert.ok(compact.length < pretty.length / 8);
+  assert.deepEqual(schema.parseMessageUsage(compact), index);
+  const values = new Map();
+  const memory = {
+    getItem: (key) => values.get(key) ?? null,
+    setItem(key, value) {
+      if (value.length > compact.length + 10)
+        throw Object.assign(new Error('quota'), { name: 'QuotaExceededError' });
+      values.set(key, value);
+    },
+  };
+  const store = createUsageStore({ storage: memory });
+  store.seed(index);
+  assert.equal(store.getHealth().state, 'ready');
+  assert.deepEqual(createUsageStore({ storage: memory }).getIndex(), index);
+  const malformed = JSON.parse(compact);
+  malformed.bindings[0].snapshot = 99999;
+  assert.throws(() => schema.parseMessageUsage(JSON.stringify(malformed)), /reference/);
+});
+
+test('quota and access failures have distinct reasons and a later successful save recovers health', async () => {
+  const [{ createUsageStore }, schema] = await api;
+  let failed = true;
+  const memory = {
+    getItem: () => null,
+    setItem() {
+      if (failed) throw Object.assign(new Error('full'), { name: 'QuotaExceededError' });
+    },
+  };
+  const store = createUsageStore({ storage: memory }),
+    index = schema.createMessageUsageIndex([record('app-server-reported')], {
+      mode: 'app-server-reported',
+    });
+  store.seed(index);
+  assert.equal(store.getHealth().storageReason, 'quota');
+  failed = false;
+  store.seed(index);
+  assert.equal(store.getHealth().state, 'ready');
+  assert.equal(store.getHealth().storageReason, null);
+  const denied = createUsageStore({
+    storage: {
+      getItem() {
+        throw Object.assign(new Error('blocked'), { name: 'SecurityError' });
+      },
+      setItem() {},
+    },
+  });
+  assert.equal(denied.getHealth().storageReason, 'denied');
+});

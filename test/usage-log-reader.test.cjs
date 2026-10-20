@@ -49,5 +49,12 @@ test(
     collector.ingestLocalRecords([result.sample]);
     assert.equal(collector.getActive()[0].source.requestCount, 1);
     assert.equal(collector.getActive()[0].usage.total.totalTokens, 1100);
+    const prices = createAppServerUsageCollector();
+    prices.observeConversations([{ hostId: 'local', threadId: result.modelSample.threadId }]);
+    prices.ingestLocalRecords([result.modelSample], [result.modelSample.threadId]);
+    const summary = prices.getConversations()[0];
+    assert.equal(summary.cost.partial, false);
+    assert.equal(summary.cost.pricedRequestCount, 1);
+    assert.equal(summary.cost.amountUSD, 0.00205);
   },
 );

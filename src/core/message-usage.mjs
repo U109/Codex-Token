@@ -261,11 +261,34 @@ export function mergeMessageUsage(index, record) {
   );
 }
 
-export function serializeMessageUsage(index) {
+export function serializeMessageUsage(index, { compact = false } = {}) {
   if (!isMessageUsageIndex(index)) throw new TypeError('Invalid message usage index');
-  return (
-    JSON.stringify(createMessageUsageIndex(index.records, { mode: index.mode }), null, 2) + '\n'
-  );
+  const clean = createMessageUsageIndex(index.records, { mode: index.mode });
+  if (compact) {
+    // 多条助手消息共享同一轮统计；磁盘只存一份快照，消息保留独立身份和版本。
+    const snapshots = [],
+      lookup = new Map();
+    const bindings = clean.records.map(({ itemId, revision, ...snapshot }) => {
+      const signature = JSON.stringify(snapshot);
+      let reference = lookup.get(signature);
+      if (reference === undefined) {
+        reference = snapshots.length;
+        lookup.set(signature, reference);
+        snapshots.push(snapshot);
+      }
+      return { snapshot: reference, itemId, revision };
+    });
+    return (
+      JSON.stringify({
+        version: 2,
+        mode: clean.mode,
+        scope: 'message-usage-storage',
+        snapshots,
+        bindings,
+      }) + '\n'
+    );
+  }
+  return JSON.stringify(clean, null, 2) + '\n';
 }
 
 /** 从有大小上限的 JSON 恢复索引，重新校验每条记录，不信任持久化输入。 */
@@ -273,6 +296,27 @@ export function parseMessageUsage(text) {
   if (typeof text !== 'string' || text.length > 10_000_000)
     throw new TypeError('Invalid message usage document');
   const index = JSON.parse(text);
+  if (index?.version === 2 && index.scope === 'message-usage-storage') {
+    if (
+      !Object.hasOwn(SCOPES, index.mode) ||
+      !Array.isArray(index.snapshots) ||
+      !Array.isArray(index.bindings) ||
+      index.snapshots.length > 10000 ||
+      index.bindings.length > 10000
+    )
+      throw new TypeError('Invalid shared usage document');
+    let expanded = 0;
+    const sizes = index.snapshots.map((snapshot) => JSON.stringify(snapshot).length);
+    const records = index.bindings.map((binding) => {
+      const reference = binding?.snapshot;
+      if (!Number.isSafeInteger(reference) || reference < 0 || reference >= index.snapshots.length)
+        throw new TypeError('Invalid usage snapshot reference');
+      expanded += sizes[reference];
+      if (expanded > 100_000_000) throw new TypeError('Usage document expansion limit');
+      return { ...index.snapshots[reference], itemId: binding.itemId, revision: binding.revision };
+    });
+    return createMessageUsageIndex(records, { mode: index.mode });
+  }
   if (!isMessageUsageIndex(index)) throw new TypeError('Unsupported message usage document');
   return createMessageUsageIndex(index.records, { mode: index.mode });
 }

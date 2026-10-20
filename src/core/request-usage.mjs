@@ -10,6 +10,22 @@ export const USAGE_FIELDS = [
 export const usageId = (value) => typeof value === 'string' && /^[\w.:-]{1,200}$/.test(value);
 export const equalUsage = (a, b) => USAGE_FIELDS.every((field) => a?.[field] === b?.[field]);
 export const emptyUsage = () => Object.fromEntries(USAGE_FIELDS.map((field) => [field, 0]));
+const cleanRequestModel = (raw) => {
+  if (typeof raw?.id !== 'string' || !/^[\w./:-]{1,200}$/.test(raw.id)) return Object.freeze({});
+  return Object.freeze({
+    id: raw.id,
+    ...(usageId(raw.provider) ? { provider: raw.provider } : {}),
+    ...(['configured', 'reported', 'turn-context'].includes(raw.basis) ? { basis: raw.basis } : {}),
+  });
+};
+/** 实际路由优先于历史配置，历史配置优先于界面选择；补全模型不改变请求身份或用量。 */
+export function mergeRequestModel(previous, incoming) {
+  const rank = (model) =>
+    !model.id ? 0 : model.basis === 'reported' ? 3 : model.basis === 'turn-context' ? 2 : 1;
+  const before = cleanRequestModel(previous),
+    after = cleanRequestModel(incoming);
+  return rank(after) > rank(before) ? after : before;
+}
 export function cleanUsage(raw) {
   if (!raw || !USAGE_FIELDS.every((field) => Number.isSafeInteger(raw[field]) && raw[field] >= 0))
     return null;
@@ -57,6 +73,7 @@ export function cleanLocalUsage(raw) {
     responseId: raw.responseId,
     usage,
     checkpoint,
+    model: cleanRequestModel(raw.model?.basis === 'turn-context' ? raw.model : null),
     replay: raw.replay !== false,
   };
 }
@@ -74,7 +91,12 @@ export function mergeRequest(reports, incoming) {
       !equalUsage(previous.checkpoint?.turnTotal, incoming.checkpoint?.turnTotal)
     )
       return { status: 'conflict' };
-    return { status: 'duplicate', reports, added: false };
+    const model = mergeRequestModel(previous.model, incoming.model);
+    if (JSON.stringify(model) === JSON.stringify(previous.model ?? {}))
+      return { status: 'duplicate', reports, added: false };
+    const next = [...reports];
+    next[match] = Object.freeze({ ...previous, model });
+    return { status: 'updated', reports: next, added: false };
   }
   const atCheckpoint = reports.filter(
     (report) =>
@@ -93,7 +115,14 @@ export function mergeRequest(reports, incoming) {
       equalUsage(report.usage, incoming.usage) && (!incoming.responseId || !report.responseId),
   );
   if (counterpart) {
-    if (!incoming.responseId) return { status: 'duplicate', reports, added: false };
+    if (!incoming.responseId) {
+      const model = mergeRequestModel(counterpart.model, incoming.model);
+      if (JSON.stringify(model) === JSON.stringify(counterpart.model ?? {}))
+        return { status: 'duplicate', reports, added: false };
+      const next = [...reports];
+      next[next.indexOf(counterpart)] = Object.freeze({ ...counterpart, model });
+      return { status: 'updated', reports: next, added: false };
+    }
     match = reports.indexOf(counterpart);
   } else if (
     incoming.usage.totalTokens > 0 &&
@@ -103,7 +132,8 @@ export function mergeRequest(reports, incoming) {
     return { status: 'conflict' };
   }
   const next = [...reports];
-  if (match >= 0) next[match] = { ...incoming, model: reports[match].model };
+  if (match >= 0)
+    next[match] = { ...incoming, model: mergeRequestModel(reports[match].model, incoming.model) };
   else next.push(incoming);
   if (next.length > 10000 || !sumRequests(next)) return { status: 'overflow' };
   // turnTotal 在完整本地序列中给出顺序；客户端报告使用线程检查点。
@@ -154,7 +184,9 @@ export function reconcileLocalPrefix(reports, localReports) {
         equalUsage(old.checkpoint?.total, report.checkpoint.total) &&
         (!old.responseId || old.responseId === report.responseId),
     );
-    return previous ? { ...report, model: previous.model } : report;
+    return previous
+      ? { ...report, model: mergeRequestModel(previous.model, report.model) }
+      : report;
   });
   for (const report of reports) {
     if (!report.checkpoint || report.checkpoint.total.totalTokens <= latest) continue;

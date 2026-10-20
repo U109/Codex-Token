@@ -9,7 +9,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Web.Script.Serialization;
 
-// 只读匹配线程的 rollout 文件。扫描经过正文所在的字节，但只解码候选用量行；
+// 只读匹配线程的 rollout 文件。扫描经过正文所在的字节，但只解码候选用量和回合配置行；
 // 传出及持有的记录均重新构造成白名单元数据，不记录原始行、正文、路径或异常文本。
 internal sealed class UsageLogReader : IDisposable
 {
@@ -42,6 +42,11 @@ internal sealed class UsageLogReader : IDisposable
         RegexOptions.CultureInvariant
     );
     private static readonly byte[] Marker = Encoding.ASCII.GetBytes("\"token_usage_record\"");
+    private static readonly byte[] ContextMarker = Encoding.ASCII.GetBytes("\"turn_context\"");
+    private static readonly Regex ModelId = new Regex(
+        @"^[\w./:-]{1,200}$",
+        RegexOptions.CultureInvariant
+    );
     private readonly JavaScriptSerializer json = new JavaScriptSerializer
     {
         MaxJsonLength = MaxLine,
@@ -78,6 +83,9 @@ internal sealed class UsageLogReader : IDisposable
             LineStart;
         internal byte[] Anchor = new byte[0];
         internal MemoryStream Line = new MemoryStream();
+        internal readonly Dictionary<string, string> TurnModels = new Dictionary<string, string>(
+            StringComparer.Ordinal
+        );
         internal bool Oversized,
             AtEnd,
             Missing;
@@ -95,6 +103,7 @@ internal sealed class UsageLogReader : IDisposable
             LineStart = 0;
             Anchor = new byte[0];
             Line.SetLength(0);
+            TurnModels.Clear();
             Oversized = false;
             AtEnd = false;
         }
@@ -556,15 +565,7 @@ internal sealed class UsageLogReader : IDisposable
     {
         byte[] bytes = cursor.Line.GetBuffer();
         int length = (int)cursor.Line.Length;
-        bool candidate = false;
-        for (int i = 0; i <= length - Marker.Length && !candidate; i++)
-        {
-            int j = 0;
-            while (j < Marker.Length && bytes[i + j] == Marker[j])
-                j++;
-            candidate = j == Marker.Length;
-        }
-        if (!candidate)
+        if (!Contains(bytes, length, Marker) && !Contains(bytes, length, ContextMarker))
             return;
         try
         {
@@ -572,13 +573,27 @@ internal sealed class UsageLogReader : IDisposable
                 .GetString(bytes, 0, length)
                 .TrimStart('\uFEFF');
             var row = json.DeserializeObject(text) as Dictionary<string, object>;
-            if (Text(row, "type") != "token_usage_record")
+            string type = Text(row, "type");
+            if (type != "token_usage_record" && type != "turn_context")
                 return;
             object raw;
             var payload = row.TryGetValue("payload", out raw)
                 ? raw as Dictionary<string, object>
                 : null;
-            var clean = CleanRecord(payload, cursor.ThreadId, cursor.LineStart < cursor.InitialEnd);
+            if (type == "turn_context")
+            {
+                // 只记录该文件内先于请求出现、具有精确 turn_id 的模型，不借用其他回合或当前选择。
+                string turn = Text(payload, "turn_id"),
+                    model = Text(payload, "model");
+                if (turn == null || !Id.IsMatch(turn))
+                    return;
+                if (model == null || !ModelId.IsMatch(model))
+                    cursor.TurnModels.Remove(turn);
+                else if (cursor.TurnModels.Count < 10000 || cursor.TurnModels.ContainsKey(turn))
+                    cursor.TurnModels[turn] = model;
+                return;
+            }
+            var clean = CleanRecord(payload, cursor, cursor.LineStart < cursor.InitialEnd);
             if (clean == null)
             {
                 rejectedRecords++;
@@ -599,7 +614,7 @@ internal sealed class UsageLogReader : IDisposable
 
     private static object CleanRecord(
         Dictionary<string, object> payload,
-        string expectedThread,
+        Cursor cursor,
         bool replay
     )
     {
@@ -607,7 +622,7 @@ internal sealed class UsageLogReader : IDisposable
             turn = Text(payload, "turn_id"),
             response = Text(payload, "response_id");
         if (
-            thread != expectedThread
+            thread != cursor.ThreadId
             || turn == null
             || response == null
             || !Id.IsMatch(turn)
@@ -626,6 +641,8 @@ internal sealed class UsageLogReader : IDisposable
             )
         )
             return null;
+        string model;
+        cursor.TurnModels.TryGetValue(turn, out model);
         return new
         {
             threadId = thread,
@@ -633,8 +650,22 @@ internal sealed class UsageLogReader : IDisposable
             responseId = response,
             usage = usage,
             checkpoint = new { total = total, turnTotal = turnTotal },
+            model = model == null ? null : new { id = model, basis = "turn-context" },
             replay = replay,
         };
+    }
+
+    private static bool Contains(byte[] bytes, int length, byte[] marker)
+    {
+        for (int i = 0; i <= length - marker.Length; i++)
+        {
+            int j = 0;
+            while (j < marker.Length && bytes[i + j] == marker[j])
+                j++;
+            if (j == marker.Length)
+                return true;
+        }
+        return false;
     }
 
     private static Dictionary<string, long> Counts(Dictionary<string, object> parent, string name)

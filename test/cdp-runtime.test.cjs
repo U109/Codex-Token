@@ -153,6 +153,67 @@ test('CDP mount reads only exact assistant identities, never the URL, ordinal or
     itemId: 'm1',
   });
 });
+
+test('composer identity requires a consistent native conversation and explicit host', async () => {
+  const { composerIdentityForNode } = await api;
+  assert.deepEqual(composerIdentityForNode(row({ conversationId: 'A', hostId: 'local' })), {
+    hostId: 'local',
+    threadId: 'A',
+  });
+  assert.equal(composerIdentityForNode(row({ conversationId: 'A' })), null);
+  assert.equal(composerIdentityForNode(row({ conversationId: 'A', hostId: 'bad/host' })), null);
+  const mismatch = row({ conversationId: 'A' });
+  mismatch.__reactFiber$test.return.return = {
+    memoizedProps: { conversationId: 'B', hostId: 'local' },
+  };
+  assert.equal(composerIdentityForNode(mismatch), null);
+});
+
+test('conversation summary follows the composer identity and cleans up without replacing the input', async () => {
+  const { installCdpRuntime } = await api;
+  const env = environment([]),
+    parent = row({}),
+    anchor = row({}),
+    body = row({ conversationId: 'A', hostId: 'local' });
+  parent.appendChild(anchor);
+  anchor.appendChild(body);
+  parent.insertBefore = function (node, before) {
+    this.children = this.children.filter((n) => n !== node);
+    this.children.splice(this.children.indexOf(before), 0, node);
+    node.parent = this;
+    node.parentElement = this;
+    for (let i = 0; i < this.children.length; i++)
+      this.children[i].nextSibling = this.children[i + 1] ?? null;
+  };
+  body.closest = (selector) => (selector === '[data-composer-surface-variant]' ? anchor : null);
+  let visible = true;
+  env.doc.querySelectorAll = (selector) =>
+    selector === '[data-composer-body]' && visible ? [body] : [];
+  await installCdpRuntime(config, { target: env.target, native: env.native });
+  await wait();
+  assert.equal(env.counts().renderCount, 1);
+  assert.equal(parent.children.length, 2);
+  assert.equal(parent.children[1], anchor);
+  assert.deepEqual(
+    env.target.__ctTokenConversationUsage.map((v) => v.threadId),
+    ['A'],
+  );
+  body.__reactFiber$test.return.memoizedProps = { conversationId: 'B', hostId: 'local' };
+  env.observer.callback([{ type: 'childList', target: body, addedNodes: [], removedNodes: [] }]);
+  await wait();
+  assert.equal(env.counts().renderCount, 2);
+  assert.deepEqual(
+    env.target.__ctTokenConversationUsage.map((v) => v.threadId),
+    ['B'],
+  );
+  assert.equal(anchor.children[0], body, 'the native input is retained');
+  visible = false;
+  env.observer.callback([{ type: 'childList', target: parent, addedNodes: [], removedNodes: [] }]);
+  await wait();
+  assert.equal(env.counts().unmountCount, 1);
+  assert.deepEqual(env.target.__ctTokenConversationUsage, []);
+  env.target.__ctTokenCdpRuntimeV1.dispose();
+});
 test('CDP identity follows the current alternate after native React commits', async () => {
   const { messageIdentityForNode } = await api;
   const node = row(identity('old'));

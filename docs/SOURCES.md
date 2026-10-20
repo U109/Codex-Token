@@ -20,3 +20,5 @@
 用量上报时机于 2026-10-20 对照 [模型响应与工具收尾](https://github.com/openai/codex/blob/main/codex-rs/core/src/session/turn.rs) 和 [会话用量、额度通知](https://github.com/openai/codex/blob/main/codex-rs/core/src/session/mod.rs) 核对：文字增量先行，用量在模型响应完成后记录，`thread/tokenUsage/updated` 还可能等相关工具收尾后发出；额度更新也可能重发未变化的用量快照。不能把文字增量次数或通知次数当作请求数。
 
 本地增量采集于 2026-10-20 对照当前客户端的 rollout `token_usage_record` 核对：`response_id`、`usage`、`turn_token_usage`、`thread_token_usage` 分别提供请求身份、单次用量和两级累计检查点。该记录格式属于本地实现，官方文档没有承诺稳定；项目严格校验并保留通知兜底。
+
+同日核对 rollout `turn_context` 中的 `turn_id` 和 `model`：读取器将先于请求出现的同回合模型配置作为历史价格参考，不视为实际路由遥测。明确的 `model/rerouted` 通知仍优先；缺少对应配置时不借用当前选择或其他回合的型号。
