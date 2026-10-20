@@ -88,6 +88,7 @@ test('observed averages require their distinct scope and at least one timed repo
 test('model speed uses only timed request windows and never reuses the old wall clock average', async () => {
   const { calculateModelSpeed } = await metrics;
   const timing = {
+    algorithmVersion: 2,
     scope: 'model-request-windows',
     basis: 'client-lifecycle',
     excludesTools: true,
@@ -99,6 +100,9 @@ test('model speed uses only timed request windows and never reuses the old wall 
   assert.equal(calculateModelSpeed(timing), 100);
   assert.equal(calculateModelSpeed({ ...timing, outputTokens: 0 }), 0);
   for (const change of [
+    { algorithmVersion: undefined },
+    { algorithmVersion: 1 },
+    { algorithmVersion: 3 },
     { scope: 'turn-observed-window' },
     { basis: 'unknown' },
     { excludesTools: false },

@@ -215,6 +215,63 @@ export function inferModelCapability(source) {
   return one(candidates);
 }
 
+/** 唯一的本地 AppServerManager 原子；同时核对初始化形状与明确的管理器消费点。 */
+export function inferApiFastCapability(source) {
+  if (typeof source !== 'string' || source.length > MAX_ASSET_CHARACTERS) fail();
+  const exports = exportNames(source),
+    candidates = [];
+  const pattern = new RegExp('(?<![\\w$])(' + ID + ')\\s*=\\s*' + ID + '\\s*\\(', 'g');
+  for (const match of source.matchAll(pattern)) {
+    if (!exports.has(match[1])) continue;
+    const start = match.index + match[0].lastIndexOf('(');
+    const preview = source.slice(start, start + 600);
+    if (!/\{\s*scope\s*:/.test(preview) || !/[`'"]local[`'"]/.test(preview)) continue;
+    const body = source.slice(start, balanced(source, start) + 1);
+    if (body.length > 1000 || !/return\s+null\b/.test(body)) continue;
+    if (
+      !new RegExp(
+        '\\.get\\(\\s*' + escaped(match[1]) + '\\s*,[^)]{1,100}\\)\\?\\.getConversation\\(',
+      ).test(source)
+    )
+      continue;
+    candidates.push(exports.get(match[1]));
+  }
+  return one(candidates);
+}
+
+/** 复用模型选择器的项目上下文；新聊天的目录来自宿主订阅，不能借用其他会话或权限目录。 */
+export function inferApiFastContextCapability(source) {
+  if (typeof source !== 'string' || source.length > MAX_ASSET_CHARACTERS) fail();
+  const exports = exportNames(source),
+    candidates = [];
+  const pattern = new RegExp('(?<![\\w$])(' + ID + ')\\s*=\\s*' + ID + '\\s*\\(', 'g');
+  for (const match of source.matchAll(pattern)) {
+    if (!exports.has(match[1])) continue;
+    const start = match.index + match[0].lastIndexOf('(');
+    const preview = source.slice(start, start + 1500);
+    if (
+      ![
+        'activeLocalProjectCwd',
+        'conversationCwd',
+        'conversationHostId',
+        'selectedRemoteProject',
+      ].every((field) => preview.includes(field + ':'))
+    )
+      continue;
+    const body = source.slice(start, balanced(source, start) + 1);
+    if (
+      body.length <= 1500 &&
+      new RegExp('^\\(\\s*' + ID + '\\s*,\\s*\\(\\s*' + ID + '\\s*,\\s*\\{\\s*get\\s*:').test(
+        body,
+      ) &&
+      /\bactiveWorkspaceRoot\s*:/.test(body) &&
+      /\bisActiveWorkspaceRootLoading\s*:/.test(body)
+    )
+      candidates.push(exports.get(match[1]));
+  }
+  return one(candidates);
+}
+
 /** 只读当前 app:// 页面自己的有限本地资源，发现必要能力及可选的型号元数据。 */
 export async function discoverHostConfig({ document: doc, target = globalThis, fetchSource } = {}) {
   const origin = target.location?.origin;
@@ -309,6 +366,17 @@ export async function discoverHostConfig({ document: doc, target = globalThis, f
       });
   } catch {
     /* 可选型号元数据失败时不能停用 Token 采集。 */
+  }
+  try {
+    const initial = one([...sources].filter(([url]) => /\/app-initial[.-]/.test(url)));
+    if (native.scopeHookExport)
+      Object.assign(config, {
+        apiFastModuleUrl: initial[0],
+        apiFastManagerExport: inferApiFastCapability(initial[1]),
+        apiFastContextExport: inferApiFastContextCapability(initial[1]),
+      });
+  } catch {
+    /* Fast 是独立的可选能力，不能依赖混淆名或使统计失效。 */
   }
   return config;
 }

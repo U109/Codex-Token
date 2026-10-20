@@ -97,6 +97,49 @@ test('model request speed excludes overlapping local tools once and freezes betw
   assert.doesNotMatch(f.records.serializeMessageUsage(restored), /PRIVATE_/);
 });
 
+test('context compaction output retains its model time in both native and local timing', async () => {
+  for (const source of ['native', 'local']) {
+    let clock = 0;
+    const f = await fixture({ now: () => clock }),
+      first = usage(4000),
+      compacted = usage(56000);
+    const report = (value, total, responseId) =>
+      source === 'native'
+        ? f.report(value, total)
+        : f.collector.ingestLocalRecords([
+            {
+              threadId: 'A',
+              turnId: 't1',
+              responseId,
+              usage: value,
+              checkpoint: { total, turnTotal: total },
+              replay: false,
+            },
+          ]);
+    const item = (method, type, id) =>
+      f.send(method, { threadId: 'A', turnId: 't1', item: { type, id } });
+    f.start();
+    clock = 10000;
+    report(first, first, 'r1');
+    item('item/started', 'commandExecution', 'tool');
+    clock = 18000;
+    item('item/completed', 'commandExecution', 'tool');
+    item('item/started', 'contextCompaction', 'compaction');
+    clock = 158000;
+    report(compacted, sum(first, compacted), 'r2');
+    item('item/completed', 'contextCompaction', 'compaction');
+    const measured = f.collector.getActive()[0].modelTiming;
+    assert.equal(measured.durationMs, 150000, source);
+    assert.equal(measured.outputTokens, 6000, source);
+    assert.equal(measured.excludedToolMs, 8000, source);
+    assert.equal(measured.samples, 2, source);
+    const { calculateModelSpeed } = await import('../src/core/usage-metrics.mjs');
+    assert.equal(calculateModelSpeed(measured), 40, source);
+    f.finish();
+    assert.deepEqual(f.get().modelTiming, measured, source);
+  }
+});
+
 test('missing starts, unmatched tools and disconnects skip uncertain model timing without losing valid samples', async () => {
   let clock = 1000;
   const f = await fixture({ now: () => clock }),

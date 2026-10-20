@@ -3,6 +3,8 @@ import { createDesktopBridge } from './desktop-bridge.mjs';
 import { createTokenBadge } from '../ui/token-badge.mjs';
 import { createConversationBar } from '../ui/conversation-bar.mjs';
 import { createModelMetadataBridge } from './model-metadata.mjs';
+import { createApiFastModeController } from './api-fast-mode.mjs';
+import { createFastModeToggle } from '../ui/fast-mode-toggle.mjs';
 import { discoverHostConfig } from './cdp-discovery.mjs';
 
 const OWNER = 'data-ct-cdp-root';
@@ -77,6 +79,42 @@ export function composerIdentityForNode(node) {
     threadId = props.conversationId;
     if (props.hostId !== undefined)
       return validId(props.hostId) ? { hostId: props.hostId, threadId } : null;
+  }
+  return null;
+}
+
+/** 模型弹窗与触发器共享 Fiber 归属；只取型号、身份和禁用状态，不读取输入内容。 */
+export function modelPickerIdentityForNode(node) {
+  let model = null,
+    threadId,
+    hostId = null,
+    disabled = false;
+  for (
+    let fiber = currentFiber(node), i = 0;
+    fiber && i < MAX_FIBER_DEPTH;
+    i++, fiber = fiber.return
+  ) {
+    const props = fiber.memoizedProps;
+    if (!props) continue;
+    if (
+      model == null &&
+      typeof props.model === 'string' &&
+      Array.isArray(props.serviceTierOptions) &&
+      typeof props.onOpenChange === 'function' &&
+      props.showReasoningEffortControls === true
+    ) {
+      model = props.model;
+      disabled = props.disabled === true || props.modelOptionsDisabled === true;
+    }
+    if (props.conversationId !== undefined) {
+      if (props.conversationId !== null && !validId(props.conversationId)) return null;
+      if (threadId !== undefined && threadId !== props.conversationId) return null;
+      threadId = props.conversationId;
+    }
+    if (hostId == null && validId(props.executionTargetHostId))
+      hostId = props.executionTargetHostId;
+    if (threadId !== undefined && validId(props.hostId)) hostId ??= props.hostId;
+    if (model && hostId && threadId !== undefined) return { hostId, threadId, model, disabled };
   }
   return null;
 }
@@ -237,6 +275,7 @@ export async function installCdpRuntime(config, dependencies = {}) {
     previous?.version === config.releaseVersion &&
     previous.features?.includes('conversation-summary-v1') &&
     previous.features?.includes('historical-models-v1') &&
+    previous.features?.includes('api-fast-mode-v1') &&
     typeof previous.exchangeLocalUsage === 'function' &&
     ['ready', 'loading'].includes(previous.state)
   )
@@ -250,6 +289,8 @@ export async function installCdpRuntime(config, dependencies = {}) {
     modelBridge = null;
   const roots = new Map();
   const composerRoots = new Map();
+  const fastRoots = new Map(),
+    fastControllers = new Map();
   const localSession = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
   const status = {
     version: config.releaseVersion,
@@ -259,6 +300,7 @@ export async function installCdpRuntime(config, dependencies = {}) {
     notifications: 0,
     parserReady: false,
     modelMetadataState: 'unavailable',
+    apiFastState: 'unavailable',
     errorCode: null,
     errorStage: null,
   };
@@ -268,6 +310,7 @@ export async function installCdpRuntime(config, dependencies = {}) {
     modelMetadata: modelBridge?.getHealth() ?? null,
   });
   const disposeRoot = (row, entry) => {
+    entry.cleanup?.();
     try {
       entry.root.unmount();
     } catch {
@@ -287,6 +330,10 @@ export async function installCdpRuntime(config, dependencies = {}) {
     roots.clear();
     for (const [row, entry] of composerRoots) disposeRoot(row, entry);
     composerRoots.clear();
+    for (const [row, entry] of fastRoots) disposeRoot(row, entry);
+    fastRoots.clear();
+    for (const entry of fastControllers.values()) entry.dispose();
+    fastControllers.clear();
     modelBridge?.dispose();
     status.state = 'disposed';
   };
@@ -319,7 +366,94 @@ export async function installCdpRuntime(config, dependencies = {}) {
       /* 畸形事件不能中断宿主订阅方。 */
     }
   };
-  let React, createRoot, Badge, ConversationBar, ScopedBadge, MetadataBoundary, scopeBrand;
+  let React,
+    createRoot,
+    Badge,
+    ConversationBar,
+    ScopedBadge,
+    MetadataBoundary,
+    scopeBrand,
+    ScopedFastControl,
+    FastBoundary,
+    fastScopeBrand;
+  const scanFastControls = () => {
+    if (!ScopedFastControl) return;
+    const seen = new Set();
+    const mount = (node, indicator) => {
+      const identity = modelPickerIdentityForNode(node);
+      if (!identity || identity.hostId !== 'local') return;
+      const context = nativeScopeContextForNode(node, fastScopeBrand);
+      if (!context) return;
+      seen.add(node);
+      let entry = fastRoots.get(node);
+      if (entry && !node.contains(entry.container)) {
+        disposeRoot(node, entry);
+        fastRoots.delete(node);
+        entry = null;
+      }
+      if (!entry) {
+        const container = doc.createElement('span');
+        container.setAttribute(OWNER, 'fast-mode');
+        if (indicator) container.style.display = 'contents';
+        else
+          Object.assign(container.style, {
+            position: 'absolute',
+            insetInlineStart: '0',
+            top: '0',
+            display: 'flex',
+          });
+        if (indicator) node.insertBefore(container, node.firstChild);
+        else node.appendChild(container);
+        entry = { container, root: createRoot(container, { identifierPrefix: 'ct-fast-' }) };
+        if (!indicator) {
+          // 补充原生 Radix 集合之外的按钮导航：模型项向左可进入 Fast，Fast 向右返回模型项。
+          const navigate = (event) => {
+            if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+            const button = container.querySelector('button:not(:disabled)');
+            if (!button) return;
+            const nativeItem = node.querySelector('[data-model-picker-view-toggle]');
+            if (event.key === 'ArrowLeft' && event.target === nativeItem) {
+              event.preventDefault();
+              event.stopPropagation();
+              button.focus();
+            } else if (event.key === 'ArrowRight' && container.contains(event.target)) {
+              event.preventDefault();
+              event.stopPropagation();
+              nativeItem?.focus();
+            }
+          };
+          node.addEventListener('keydown', navigate, true);
+          entry.cleanup = () => node.removeEventListener('keydown', navigate, true);
+        }
+        fastRoots.set(node, entry);
+      }
+      const key = JSON.stringify(identity);
+      if (entry.identityKey !== key || entry.contextValue !== context.value) {
+        entry.root.render(
+          React.createElement(
+            context.Provider,
+            { value: context.value },
+            React.createElement(
+              FastBoundary,
+              { key },
+              React.createElement(ScopedFastControl, { identity, indicator }),
+            ),
+          ),
+        );
+        entry.identityKey = key;
+        entry.contextValue = context.value;
+      }
+    };
+    for (const trigger of doc.querySelectorAll('[data-codex-intelligence-trigger]'))
+      mount(trigger, true);
+    for (const controls of doc.querySelectorAll('[role="menu"] [class*="_ViewControls_"]'))
+      mount(controls, false);
+    for (const [node, entry] of fastRoots)
+      if (!seen.has(node)) {
+        disposeRoot(node, entry);
+        fastRoots.delete(node);
+      }
+  };
   const scan = () => {
     timer = null;
     if (stopped) return;
@@ -459,6 +593,7 @@ export async function installCdpRuntime(config, dependencies = {}) {
         disposeRoot(anchor, entry);
         composerRoots.delete(anchor);
       }
+    scanFastControls();
     status.state = 'ready';
   };
   const schedule = () => {
@@ -479,7 +614,7 @@ export async function installCdpRuntime(config, dependencies = {}) {
   };
   target[GLOBAL] = {
     version: config.releaseVersion,
-    features: ['conversation-summary-v1', 'historical-models-v1'],
+    features: ['conversation-summary-v1', 'historical-models-v1', 'api-fast-mode-v1'],
     get state() {
       return status.state;
     },
@@ -531,6 +666,80 @@ export async function installCdpRuntime(config, dependencies = {}) {
     Badge = createTokenBadge(React);
     ConversationBar = createConversationBar(React, target);
     modelBridge = createModelMetadataBridge(target);
+    if (dependencies.fastRuntime || config.apiFastModuleUrl) {
+      try {
+        const module = dependencies.fastRuntime ?? (await import(config.apiFastModuleUrl));
+        const managerAtom = module.managerAtom ?? module[config.apiFastManagerExport];
+        const contextAtom = module.contextAtom ?? module[config.apiFastContextExport];
+        const useScope = module.useScope ?? native[config.scopeHookExport];
+        fastScopeBrand = managerAtom?.scope?.__scopeBrand;
+        if (
+          !fastScopeBrand ||
+          contextAtom?.scope !== managerAtom.scope ||
+          typeof useScope !== 'function' ||
+          typeof React.Component !== 'function'
+        )
+          throw new Error();
+        const Toggle = createFastModeToggle(React);
+        ScopedFastControl = function ApiFastControl({ identity, indicator }) {
+          const scope = useScope(managerAtom.scope);
+          const [binding, setBinding] = React.useState(null);
+          React.useEffect(
+            () =>
+              scope.watch(({ get }) => {
+                const manager = get(managerAtom, identity.hostId);
+                const context = get(contextAtom, identity.threadId);
+                if (
+                  !manager ||
+                  context?.hostId !== identity.hostId ||
+                  (context.cwd !== null && typeof context.cwd !== 'string')
+                ) {
+                  setBinding(null);
+                  return;
+                }
+                let entry = fastControllers.get(manager);
+                if (!entry) {
+                  entry = createApiFastModeController(manager, {
+                    queryCache: scope.queryClient?.getQueryCache?.(),
+                  });
+                  fastControllers.set(manager, entry);
+                }
+                setBinding((previous) =>
+                  previous?.controller === entry && previous.cwd === context.cwd
+                    ? previous
+                    : { controller: entry, cwd: context.cwd },
+                );
+              }),
+            [scope, identity.hostId, identity.threadId],
+          );
+          return identity.disabled || !binding
+            ? null
+            : React.createElement(Toggle, {
+                controller: binding.controller,
+                identity: { ...identity, cwd: binding.cwd },
+                indicator,
+              });
+        };
+        FastBoundary = class extends React.Component {
+          constructor(props) {
+            super(props);
+            this.state = { failed: false };
+          }
+          static getDerivedStateFromError() {
+            return { failed: true };
+          }
+          componentDidCatch() {
+            status.apiFastState = 'unavailable';
+          }
+          render() {
+            return this.state.failed ? null : this.props.children;
+          }
+        };
+        status.apiFastState = 'ready';
+      } catch {
+        /* Fast 不可用不能阻断统计或宿主模型选择器。 */
+      }
+    }
     if (dependencies.metadataRuntime || config.modelMetadataModuleUrl) {
       try {
         let metadata = dependencies.metadataRuntime;

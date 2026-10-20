@@ -33,6 +33,38 @@ function row(props) {
     },
   };
 }
+
+test('Fast controls bind to the exact model picker host and conversation, including new chat drafts', async () => {
+  const { modelPickerIdentityForNode } = await api;
+  const picker = {
+    model: 'synthetic-model',
+    serviceTierOptions: [],
+    showReasoningEffortControls: true,
+    onOpenChange() {},
+  };
+  const node = row(picker);
+  node.__reactFiber$test.return.return = {
+    memoizedProps: { conversationId: 'A', hostId: 'local' },
+  };
+  assert.deepEqual(modelPickerIdentityForNode(node), {
+    hostId: 'local',
+    threadId: 'A',
+    model: 'synthetic-model',
+    disabled: false,
+  });
+  node.__reactFiber$test.return.return.memoizedProps = {
+    conversationId: null,
+    executionTargetHostId: 'local',
+  };
+  assert.equal(modelPickerIdentityForNode(node).threadId, null);
+  node.__reactFiber$test.return.return.memoizedProps = {
+    conversationId: 'bad/id',
+    hostId: 'local',
+  };
+  assert.equal(modelPickerIdentityForNode(node), null);
+  delete picker.onOpenChange;
+  assert.equal(modelPickerIdentityForNode(node), null);
+});
 const identity = (thread = 'A', item = 'm1', hostId = 'local', turn = 't1') => ({
   hostId,
   conversationId: thread,
@@ -122,6 +154,106 @@ function environment(rows) {
     counts: () => ({ renderCount, unmountCount }),
   };
 }
+
+test('Fast controls follow the native project subscription and never reuse another host directory', async (t) => {
+  const { installCdpRuntime } = await api;
+  const env = environment([]),
+    node = row({
+      model: 'synthetic-model',
+      serviceTierOptions: [],
+      showReasoningEffortControls: true,
+      onOpenChange() {},
+    });
+  const scopeType = { __scopeBrand: 'TestAppScope' },
+    managerAtom = { scope: scopeType },
+    contextAtom = { scope: scopeType };
+  const context = { $$typeof: Symbol.for('react.context'), displayName: scopeType.__scopeBrand };
+  context.Provider = context;
+  node.__reactFiber$test.return.return = {
+    memoizedProps: { conversationId: null, executionTargetHostId: 'local' },
+    return: { type: context, memoizedProps: { value: new Map() } },
+  };
+  node.insertBefore = (child) => node.appendChild(child);
+  env.doc.querySelectorAll = (selector) =>
+    selector === '[data-codex-intelligence-trigger]' ? [node] : [];
+  const manager = {
+    async sendRequest() {},
+    async getAuthMethod() {
+      return 'apikey';
+    },
+    getConversation() {},
+    async updateThreadSettingsForNextTurn() {},
+    async setDefaultServiceTierConfig() {},
+  };
+  let project = { hostId: 'local', cwd: 'C:/first-project', PRIVATE_FIELD: 'not-for-the-control' },
+    callback,
+    componentState = null;
+  const subscriptions = [],
+    effects = [],
+    rendered = [];
+  const scope = {
+    watch(fn) {
+      callback = fn;
+      fn({
+        get(atom, arg) {
+          subscriptions.push({ atom, arg });
+          if (atom === managerAtom) return manager;
+          assert.equal(atom, contextAtom);
+          return project;
+        },
+      });
+      return () => {
+        callback = null;
+      };
+    },
+  };
+  const React = {
+    ...env.native.react(),
+    Component: class {},
+    createElement: (tag, props, ...children) => ({
+      tag,
+      props: { ...props, ...(children.length ? { children: children[0] } : {}) },
+    }),
+    useState: () => [
+      componentState,
+      (next) => {
+        componentState = typeof next === 'function' ? next(componentState) : next;
+      },
+    ],
+    useEffect: (effect) => effects.push(effect),
+  };
+  env.native.react = () => React;
+  env.native.dom = () => ({
+    createRoot: () => ({ render: (element) => rendered.push(element), unmount() {} }),
+  });
+  t.after(() => env.target.__ctTokenCdpRuntimeV1?.dispose());
+  await installCdpRuntime(config, {
+    ...env,
+    fastRuntime: { managerAtom, contextAtom, useScope: () => scope },
+  });
+  await wait();
+  assert.equal(env.target.__ctTokenCdpRuntimeV1.health().apiFastState, 'ready');
+  const control = rendered[0].props.children.props.children;
+  assert.equal(control.tag(control.props), null);
+  const unsubscribe = effects.shift()();
+  t.after(unsubscribe);
+  const render = () => control.tag(control.props);
+  assert.equal(render().props.identity.cwd, 'C:/first-project');
+  project = { hostId: 'local', cwd: 'C:/second-project' };
+  callback({ get: (atom) => (atom === managerAtom ? manager : project) });
+  const second = render();
+  assert.equal(second.props.identity.cwd, 'C:/second-project');
+  assert.equal(second.props.identity.threadId, null);
+  assert.equal(Object.hasOwn(second.props.identity, 'PRIVATE_FIELD'), false);
+  assert.deepEqual(subscriptions, [
+    { atom: managerAtom, arg: 'local' },
+    { atom: contextAtom, arg: null },
+  ]);
+  project = { hostId: 'remote', cwd: '/other-host' };
+  callback({ get: (atom) => (atom === managerAtom ? manager : project) });
+  assert.equal(render(), null);
+});
+
 test('CDP mount reads only exact assistant identities, never the URL, ordinal or body', async () => {
   const { messageIdentityForNode } = await api;
   assert.deepEqual(messageIdentityForNode(row(identity())), {

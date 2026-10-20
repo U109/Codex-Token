@@ -39,8 +39,8 @@ const TOOL_TYPES = new Set([
   'webSearch',
   'imageView',
   'imageGeneration',
-  'contextCompaction',
 ]);
+// 上下文压缩本身会生成已上报的输出 Token，其耗时必须保留在模型窗口中。
 const modelConfig = (raw) => {
   if (typeof raw?.model !== 'string' || !/^[\w./:-]{1,200}$/.test(raw.model)) return {};
   return {
@@ -176,6 +176,7 @@ export function createAppServerUsageCollector({
     threadId,
     turnId,
     observed,
+    awaitingStart: false,
     incomplete: !observed,
     disconnected: false,
     requests: 0,
@@ -362,6 +363,7 @@ export function createAppServerUsageCollector({
     }
   };
   const applyLocalToTurn = (turn, report, replay) => {
+    turn.awaitingStart = false;
     const result = mergeRequest(turn.requestReports, report);
     if (!result.reports) {
       turn.incomplete = true;
@@ -549,6 +551,7 @@ export function createAppServerUsageCollector({
         );
         if (!turn && identity.running === true && !closed && turns.size < maxActiveTurns) {
           turn = makeTurn('local', identity.threadId, identity.turnId, false);
+          turn.awaitingStart = true;
           turns.set(name, turn);
           seedLocalTurn(turn);
           activeDirty = true;
@@ -637,6 +640,7 @@ export function createAppServerUsageCollector({
       for (const turn of turns.values())
         if (turn.hostId === hostId) {
           turn.incomplete = true;
+          turn.awaitingStart = false;
           turn.disconnected = true;
           turn.resetObservation = true;
           turn.model = {};
@@ -688,13 +692,17 @@ export function createAppServerUsageCollector({
           if (!turn) return { status: 'ignored' };
           const model = modelConfig({ model: params.toModel });
           if (!model.id) return { status: 'ignored' };
+          turn.awaitingStart = false;
           // 此事件只说明单次请求的路由，不改变线程默认型号。
           turn.pendingModel = { ...model, basis: 'reported' };
           return { status: 'accepted' };
         }
         if (method === 'turn/started') {
+          // DOM 可能先建立运行中占位，原生开始通知随后才到；纯身份占位不能吞掉开始事件。
+          // 已收到用量、生命周期事件或断线的回合仍不能重置计时，避免把缺失窗口当成完整采样。
+          const pending = turn?.awaitingStart && turn.requests === 0 && !turn.disconnected;
           if (
-            turn ||
+            (turn && !pending) ||
             current.records.some(
               (record) =>
                 record.hostId === hostId &&
@@ -705,8 +713,11 @@ export function createAppServerUsageCollector({
           ) {
             return { status: 'ignored', reason: 'already-observed-turn' };
           }
-          if (turns.size >= maxActiveTurns) throw new Error('Active turn capacity reached');
+          if (!turn && turns.size >= maxActiveTurns)
+            throw new Error('Active turn capacity reached');
+          const messages = pending ? turn.messages : null;
           turn = makeTurn(hostId, threadId, turnId, true);
+          if (messages) turn.messages = messages;
           turns.set(turnKey, turn);
           if (hostId === 'local') localState(threadId, turnId);
           seedLocalTurn(turn);
@@ -745,6 +756,8 @@ export function createAppServerUsageCollector({
         }
         if (method === 'item/started' || method === 'item/completed') {
           if (turn) {
+            if (id(params.item?.id) || TOOL_TYPES.has(params.item?.type))
+              turn.awaitingStart = false;
             rememberItems(turn, [params.item]);
             if (TOOL_TYPES.has(params.item?.type)) {
               if (!id(params.item.id)) turn.modelTimer.invalidate();
@@ -761,6 +774,7 @@ export function createAppServerUsageCollector({
         const previous = snapshots.get(threadKey);
         if (!total || !last) {
           if (turn) {
+            turn.awaitingStart = false;
             turn.incomplete = true;
             turn.resetObservation = true;
             turn.pendingModel = null;
@@ -779,6 +793,7 @@ export function createAppServerUsageCollector({
           return { status: 'ignored', reason: 'replayed-request-report' };
         if (previous?.turnId === turnId && same(previous.total, total)) {
           if (!same(previous.last, last) && turn) {
+            turn.awaitingStart = false;
             turn.incomplete = true;
             turn.modelTimer.invalidate();
             diagnose('conflicting-request-report');
@@ -825,12 +840,15 @@ export function createAppServerUsageCollector({
           model: Object.freeze({ ...(turn.pendingModel ?? turn.model) }),
         });
         if (!merged.reports) {
+          turn.awaitingStart = false;
           turn.incomplete = true;
           turn.modelTimer.invalidate();
           diagnose(merged.status === 'overflow' ? 'usage-overflow' : 'conflicting-request-report');
           publishActive();
           return { status: 'rejected' };
         }
+        // 去重与范围核对都通过后，才消耗纯 DOM 占位的开始标记。
+        turn.awaitingStart = false;
         if (!merged.added) {
           // 本地记录先到时这里只核对；迟到或乱序的通知不回退基线，也不再次采样。
           if (!previous || total.totalTokens >= previous.total.totalTokens)

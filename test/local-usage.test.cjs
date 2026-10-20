@@ -288,6 +288,86 @@ test('legacy history is replaced only after complete local replay; gaps cannot o
   assert.equal(f.get().modelTiming, undefined);
 });
 
+test('a running DOM identity arriving before turn start does not discard the first speed sample', async () => {
+  const f = await fixture();
+  f.collector.observeLocalIdentities([
+    { hostId: 'local', threadId: 'A', turnId: 't1', itemId: 'early-message', running: true },
+  ]);
+  f.clock(20);
+  assert.equal(f.start().status, 'accepted');
+  f.clock(2020);
+  f.disk([local('r1')]);
+  const measured = f.active().modelTiming;
+  assert.equal(measured.samples, 1);
+  assert.equal(measured.durationMs, 2000);
+  assert.equal(measured.outputTokens, a.outputTokens);
+  assert.equal(measured.coverage, 'turn');
+  f.clock(3000);
+  assert.equal(f.start().status, 'ignored');
+  assert.deepEqual(f.active().modelTiming, measured);
+  f.finish();
+  assert.deepEqual(f.get().modelTiming, measured);
+  assert.deepEqual(
+    f.schema.getMessageUsage(f.collector.getIndex(), 'A', 'early-message', 'local').modelTiming,
+    measured,
+  );
+});
+
+test('an ignored old usage snapshot cannot consume the pending DOM turn start', async () => {
+  const f = await fixture();
+  const send = (method, params) => f.collector.ingest({ hostId: 'local', method, params });
+  f.start('A', 'previous');
+  f.clock(1000);
+  send('thread/tokenUsage/updated', {
+    threadId: 'A',
+    turnId: 'previous',
+    tokenUsage: { total: a, last: a },
+  });
+  send('turn/completed', {
+    threadId: 'A',
+    turn: { id: 'previous', status: 'completed', items: [] },
+  });
+  f.collector.observeLocalIdentities([
+    { hostId: 'local', threadId: 'A', turnId: 't1', running: true },
+  ]);
+  assert.equal(f.report().reason, 'duplicate-snapshot');
+  f.clock(2020);
+  assert.equal(f.start().status, 'accepted');
+  f.clock(4020);
+  f.disk([local('r1', b, b, sum(a, b))]);
+  const measured = f.active().modelTiming;
+  assert.equal(measured.samples, 1);
+  assert.equal(measured.durationMs, 2000);
+  assert.equal(measured.outputTokens, b.outputTokens);
+  assert.equal(f.active().source.requestCount, 1);
+  f.finish();
+  assert.deepEqual(f.get().modelTiming, measured);
+  assert.deepEqual(f.get().usage.total, b);
+});
+
+test('a late start cannot reset timing after usage, tool activity or a disconnect', async () => {
+  for (const prior of ['usage', 'tool', 'disconnect']) {
+    const f = await fixture();
+    f.collector.observeLocalIdentities([
+      { hostId: 'local', threadId: 'A', turnId: 't1', running: true },
+    ]);
+    f.clock(1000);
+    if (prior === 'usage') f.disk([local('r1')]);
+    else if (prior === 'tool')
+      f.collector.ingest({
+        hostId: 'local',
+        method: 'item/started',
+        params: { threadId: 'A', turnId: 't1', item: { id: 'tool', type: 'mcpToolCall' } },
+      });
+    else f.collector.disconnect('local');
+    f.clock(2000);
+    const measured = f.active().modelTiming;
+    assert.equal(f.start().status, 'ignored', prior);
+    assert.deepEqual(f.active().modelTiming, measured, prior);
+    assert.equal(measured.samples, 0, prior);
+  }
+});
+
 test('mid-turn restart uses exact running identity and skips historical generation timing', async () => {
   const f = await fixture({
     getConfiguredModel: () => ({ id: 'current-model', basis: 'configured' }),

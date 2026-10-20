@@ -1,4 +1,5 @@
 import { cleanCheckpoint, usageId } from './request-usage.mjs';
+import { MODEL_TIMING_VERSION } from './model-timing.mjs';
 /**
  * 消息用量记录：只接收白名单元数据，集中处理身份、版本和历史恢复。
  * 这里不采集事件；null 表示未知，与实际收到的 0 严格区分。
@@ -150,9 +151,10 @@ function cleanRecord(record, mode) {
     pricing: pick(record.pricing, pricingFields),
     usage: Object.freeze({ total: Object.freeze(total) }),
     ...(requestReports !== undefined ? { requestReports } : {}),
-    ...(record.modelTiming
+    ...(record.modelTiming?.algorithmVersion === MODEL_TIMING_VERSION
       ? {
           modelTiming: pick(record.modelTiming, [
+            'algorithmVersion',
             'scope',
             'basis',
             'excludesTools',

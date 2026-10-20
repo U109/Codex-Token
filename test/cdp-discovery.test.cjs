@@ -14,6 +14,62 @@ function scope(e){let t=React.useContext(e);return {getOwnValue(){},get queryCli
 export{react as R,dom as D,parse as P,init as I,scope as S};`;
 const metadata =
   'var atom=make(Scope,(e)=>e.hostId,(e)=>e.threadId,{subscribe:client.subscribe(e),field:`modelSettings`});export{atom as A};';
+const fastContext =
+  'var target=family(Scope,(thread,{get:g})=>{let result=resolve({activeLocalProjectCwd:g(project),conversationCwd:g(cwd,thread),conversationHostId:g(host,thread),selectedRemoteProject:g(remote)});return{activeWorkspaceRoot:null,isActiveWorkspaceRootLoading:false,...result}});export{target as Workspace};';
+
+test('Fast manager discovery follows exports and fails safely on ambiguous host managers', async () => {
+  const { inferApiFastCapability } = await api;
+  const source =
+    'var manager=family(Scope,(host,{scope:s})=>{if(host!==`local`)return null;let m=getManager(s,host);return m});function use(s,h,t){return s.get(manager,h)?.getConversation(t)}export{manager as NativeManager};';
+  assert.equal(inferApiFastCapability(source), 'NativeManager');
+  assert.equal(inferApiFastCapability(source.replaceAll('manager', '$renamed')), 'NativeManager');
+  assert.throws(
+    () => inferApiFastCapability(source.replace('getConversation', 'unrelated')),
+    /capability-discovery/,
+  );
+  const second = source
+    .replaceAll('manager', 'other')
+    .replaceAll('NativeManager', 'OtherExport')
+    .replace('function use', 'function useOther');
+  assert.throws(() => inferApiFastCapability(source + second), /capability-discovery/);
+});
+
+test('Fast project context discovery rejects initializers, ambiguity and missing directory sources', async () => {
+  const { inferApiFastContextCapability, discoverHostConfig } = await api;
+  const wrapped =
+    'function initialize(){' +
+    fastContext.replace('export{target as Workspace};', '') +
+    '}export{initialize as Init,target as Workspace};';
+  assert.equal(inferApiFastContextCapability(wrapped), 'Workspace');
+  assert.equal(
+    inferApiFastContextCapability(fastContext.replaceAll('target', '$renamed')),
+    'Workspace',
+  );
+  assert.throws(
+    () => inferApiFastContextCapability(fastContext.replace('conversationCwd', 'unrelated')),
+    /capability-discovery/,
+  );
+  assert.throws(
+    () =>
+      inferApiFastContextCapability(
+        fastContext +
+          fastContext.replaceAll('target', 'other').replace(' as Workspace', ' as Other'),
+      ),
+    /capability-discovery/,
+  );
+  const { doc, target, sources } = environment();
+  sources['app://-/assets/app-initial-new.js'] +=
+    fastContext +
+    'var manager=family(Scope,(host,{scope:s})=>{if(host!==`local`)return null;return getManager(s,host)});function use(s,h,t){return s.get(manager,h)?.getConversation(t)}export{manager as Manager};';
+  const result = await discoverHostConfig({
+    document: doc,
+    target,
+    fetchSource: async (url) => sources[url],
+  });
+  assert.equal(result.apiFastManagerExport, 'Manager');
+  assert.equal(result.apiFastContextExport, 'Workspace');
+  assert.equal(result.threadModelExport, 'A');
+});
 
 test('automatic capabilities follow renamed exports without a version or fingerprint table', async () => {
   const { inferNativeCapabilities, inferModelCapability } = await api;

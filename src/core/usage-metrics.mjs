@@ -1,3 +1,5 @@
+import { MODEL_TIMING_VERSION } from './model-timing.mjs';
+
 // 只计算明确计时的单次模型请求。推理 Token 已包含在输出中，不重复累加。
 // 耗时包含首 Token 等待，不包含工具执行或其他回合。
 /** 单次模型请求的平均速度；只有明确的请求级有效耗时才能参与计算。 */
@@ -23,7 +25,8 @@ export function formatTokenSpeed(speed) {
 /** 仅使用已收齐报告的模型交互窗口；旧的整轮墙钟均速不能冒充此值。 */
 export function calculateModelSpeed(timing) {
   if (
-    timing?.scope !== 'model-request-windows' ||
+    timing?.algorithmVersion !== MODEL_TIMING_VERSION ||
+    timing.scope !== 'model-request-windows' ||
     timing.basis !== 'client-lifecycle' ||
     timing.excludesTools !== true ||
     !['turn', 'partial'].includes(timing.coverage) ||

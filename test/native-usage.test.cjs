@@ -322,6 +322,7 @@ test('live output speed uses model windows and the old wall clock value is not r
     timing: {},
     pricing: {},
     modelTiming: {
+      algorithmVersion: 2,
       scope: 'model-request-windows',
       basis: 'client-lifecycle',
       excludesTools: true,
@@ -342,6 +343,15 @@ test('live output speed uses model windows and the old wall clock value is not r
       .children[0],
     '采样不足',
   );
+  for (const algorithmVersion of [undefined, 1]) {
+    const legacy = createMessageUsageIndex(
+      [{ ...value, modelTiming: { ...value.modelTiming, algorithmVersion, samples: 2 } }],
+      { mode: value.mode },
+    );
+    assert.equal(legacy.records[0].modelTiming, undefined);
+    assert.deepEqual(legacy.records[0].usage, value.usage);
+    assert.equal(byData(await render(legacy), 'data-ct-speed')[0].children[0], '未记录耗时');
+  }
   delete value.modelTiming;
   value.observation = {
     scope: 'turn-observed-window',
