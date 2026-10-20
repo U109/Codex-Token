@@ -465,7 +465,7 @@ export function createTokenBadge(React, ActionButton = 'button') {
               )
             : null,
           detailRow(
-            referencePrice ? (reference.partial ? '已知部分标准价参考' : '标准价参考') : '价格估算',
+            referencePrice ? '标准价参考' : '价格估算',
             h(
               'span',
               { style: { display: 'inline-flex', alignItems: 'center', gap: '5px' } },

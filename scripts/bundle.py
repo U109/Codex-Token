@@ -7,6 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 # 被依赖模块必须排在使用方之前；遇到不支持的语法立即失败，避免生成半成品。
 MODULES = [
+    "src/core/request-usage.mjs",
     "src/core/message-usage.mjs",
     "src/core/model-timing.mjs",
     "src/host/app-server-usage.mjs",

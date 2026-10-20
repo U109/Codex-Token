@@ -305,15 +305,17 @@ internal static class RuntimeProgram
                     {
                         stop.Reset();
                         Uri endpoint = WaitForPage(port, pid, stop).GetAwaiter().GetResult();
-                        RunPage(
-                                endpoint,
-                                File.ReadAllText(Child(root, "runtime.js")),
-                                report,
-                                stop,
-                                false
-                            )
-                            .GetAwaiter()
-                            .GetResult();
+                        using (var localUsage = UsageLogReader.OpenDefault())
+                            RunPage(
+                                    endpoint,
+                                    File.ReadAllText(Child(root, "runtime.js")),
+                                    report,
+                                    stop,
+                                    false,
+                                    localUsage
+                                )
+                                .GetAwaiter()
+                                .GetResult();
                     }
                 }
                 finally
@@ -495,7 +497,8 @@ internal static class RuntimeProgram
         string script,
         string report,
         EventWaitHandle stop,
-        bool once
+        bool once,
+        UsageLogReader localUsage = null
     )
     {
         if (
@@ -552,25 +555,68 @@ internal static class RuntimeProgram
                     throw new Exception("runtime-injection-not-confirmed");
                 DateTime readyDeadline = DateTime.UtcNow.AddSeconds(30);
                 bool wasReady = false;
+                string localSession = null;
+                long localBatch = 0;
+                DateTime nextReport = DateTime.MinValue;
                 for (; ; )
                 {
                     Dictionary<string, object> value = null;
                     try
                     {
+                        if (localUsage != null)
+                            localUsage.Poll();
+                        string expression = "globalThis.__ctTokenCdpRuntimeV1?.health() ?? null";
+                        if (localUsage != null)
+                            expression =
+                                "globalThis.__ctTokenCdpRuntimeV1?.exchangeLocalUsage("
+                                + Json.Serialize(
+                                    new
+                                    {
+                                        session = localSession,
+                                        batchId = localBatch,
+                                        records = localUsage.Records,
+                                        caughtUp = localUsage.CaughtUp,
+                                    }
+                                )
+                                + ") ?? null";
                         var result = await cdp.Call(
                             "Runtime.evaluate",
-                            new
-                            {
-                                expression = "globalThis.__ctTokenCdpRuntimeV1?.health() ?? null",
-                                returnByValue = true,
-                            }
+                            new { expression = expression, returnByValue = true }
                         );
                         object remote;
                         var remoteObject = result.ContainsKey("result")
                             ? Map(result["result"])
                             : null;
                         if (remoteObject != null && remoteObject.TryGetValue("value", out remote))
+                        {
                             value = Map(remote);
+                            if (localUsage != null && value != null)
+                            {
+                                string session = Text(value, "session");
+                                object raw;
+                                if (!String.IsNullOrEmpty(session) && session.Length <= 100)
+                                {
+                                    if (session != localSession)
+                                    {
+                                        localUsage.Reset();
+                                        localSession = session;
+                                        localBatch++;
+                                    }
+                                    else if (
+                                        value.TryGetValue("ack", out raw)
+                                        && raw != null
+                                        && Convert.ToInt64(raw) == localBatch
+                                    )
+                                    {
+                                        localUsage.Acknowledge();
+                                        localBatch++;
+                                    }
+                                    if (value.TryGetValue("targets", out raw))
+                                        localUsage.SetTargets(raw);
+                                }
+                                value = value.TryGetValue("health", out raw) ? Map(raw) : null;
+                            }
+                        }
                     }
                     catch (CdpCommandException)
                     { /* 页面导航可能替换整个 JS 执行环境。 */
@@ -591,23 +637,30 @@ internal static class RuntimeProgram
                         wasReady = true;
                         readyDeadline = DateTime.UtcNow.AddSeconds(30);
                     }
-                    WriteReport(
-                        report,
-                        new
-                        {
-                            runtimeConnected = true,
-                            injectionReady = ready,
-                            runtimeHealth = SafeHealth(value),
-                            officialFilesWritten = false,
-                            clientCopied = false,
-                            originalProfileUsed = true,
-                            realModelRequests = 0,
-                            fullOfficialHostAcceptance = false,
-                        }
-                    );
+                    if (once || DateTime.UtcNow >= nextReport)
+                    {
+                        nextReport = DateTime.UtcNow.AddMilliseconds(1500);
+                        WriteReport(
+                            report,
+                            new
+                            {
+                                runtimeConnected = true,
+                                localUsage = localUsage != null
+                                    ? localUsage.Health()
+                                    : new { state = "unavailable" },
+                                injectionReady = ready,
+                                runtimeHealth = SafeHealth(value),
+                                officialFilesWritten = false,
+                                clientCopied = false,
+                                originalProfileUsed = true,
+                                realModelRequests = 0,
+                                fullOfficialHostAcceptance = false,
+                            }
+                        );
+                    }
                     if (once && ready)
                         break;
-                    if (stop.WaitOne(1500) || !cdp.IsOpen)
+                    if (stop.WaitOne(localUsage != null ? 250 : 1500) || !cdp.IsOpen)
                         break;
                 }
                 if (!once)

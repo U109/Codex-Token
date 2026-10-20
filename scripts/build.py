@@ -70,7 +70,11 @@ def main():
     )
     shutil.copyfile(ROOT / "LICENSE", payload / "LICENSE.txt")
     shutil.copyfile(ICON, payload / "CodexToken.ico")
-    compile_cs(ROOT / "packaging/windows/Runtime.cs", payload / "CodexToken.Runtime.exe")
+    compile_cs(
+        ROOT / "packaging/windows/Runtime.cs",
+        payload / "CodexToken.Runtime.exe",
+        [str(ROOT / "packaging/windows/UsageLogReader.cs")],
+    )
     manifest = {
         "applicationId": "org.codextoken.cdp",
         "schemaVersion": 6,
@@ -101,6 +105,7 @@ def main():
         "scripts/build.py",
         "scripts/bundle.py",
         "packaging/windows/Runtime.cs",
+        "packaging/windows/UsageLogReader.cs",
         "packaging/windows/Setup.cs",
         "packaging/windows/Manage.ps1",
         "packaging/windows/app.manifest",

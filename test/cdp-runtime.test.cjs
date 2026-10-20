@@ -577,3 +577,58 @@ test('new release uses ordinary-user CDP activation and cannot patch or clone of
     /python scripts\/build\.py/,
   );
 });
+
+test('dedicated local ingress acknowledges only the current page session, deduplicates retries and stops on dispose', async () => {
+  const { installCdpRuntime } = await api;
+  const env = environment([row(identity())]);
+  await installCdpRuntime(config, { target: env.target, native: env.native });
+  await wait();
+  const runtime = env.target.__ctTokenCdpRuntimeV1;
+  const first = runtime.exchangeLocalUsage({});
+  assert.deepEqual(first.targets, [{ threadId: 'A', revision: 1 }]);
+  const counts = {
+    totalTokens: 1100,
+    inputTokens: 1000,
+    cachedInputTokens: 500,
+    cacheWriteInputTokens: 0,
+    outputTokens: 100,
+    reasoningOutputTokens: 50,
+  };
+  const envelope = {
+    session: 'old-page',
+    batchId: 1,
+    caughtUp: ['A'],
+    records: [
+      {
+        threadId: 'A',
+        turnId: 't1',
+        responseId: 'r1',
+        usage: counts,
+        checkpoint: { total: counts, turnTotal: counts },
+        replay: true,
+        text: 'PRIVATE_LOG_BODY',
+      },
+    ],
+  };
+  assert.equal(runtime.exchangeLocalUsage(envelope).ack, null);
+  assert.equal(env.target.__ctTokenUsageIndex.records.length, 0);
+  envelope.session = first.session;
+  assert.equal(runtime.exchangeLocalUsage(envelope).ack, 1);
+  assert.equal(env.target.__ctTokenUsageIndex.records[0].usage.total.totalTokens, 1100);
+  const revision = env.target.__ctTokenUsageIndex.records[0].revision;
+  assert.equal(runtime.exchangeLocalUsage(envelope).ack, 1);
+  assert.equal(env.target.__ctTokenUsageIndex.records[0].revision, revision);
+  assert.doesNotMatch(JSON.stringify([...env.values]), /PRIVATE_LOG_BODY/);
+  assert.equal(
+    runtime.exchangeLocalUsage({ ...envelope, records: Array(129).fill(envelope.records[0]) }).ack,
+    null,
+  );
+  runtime.dispose();
+  assert.equal(runtime.exchangeLocalUsage(envelope).ack, undefined);
+  await installCdpRuntime(config, { target: env.target, native: env.native });
+  await wait();
+  const second = env.target.__ctTokenCdpRuntimeV1.exchangeLocalUsage(envelope);
+  assert.notEqual(second.session, first.session);
+  assert.equal(second.ack, null);
+  env.target.__ctTokenCdpRuntimeV1.dispose();
+});

@@ -1,3 +1,4 @@
+import { cleanCheckpoint, usageId } from './request-usage.mjs';
 /**
  * 消息用量记录：只接收白名单元数据，集中处理身份、版本和历史恢复。
  * 这里不采集事件；null 表示未知，与实际收到的 0 严格区分。
@@ -52,6 +53,7 @@ const key = (record) => JSON.stringify([record.hostId ?? 'local', record.threadI
 function cleanRequestReports(reports) {
   if (!Array.isArray(reports) || reports.length > 10000)
     throw new TypeError('Invalid request report list');
+  const responseIds = new Set();
   return Object.freeze(
     reports.map((report, index) => {
       if (
@@ -69,8 +71,21 @@ function cleanRequestReports(reports) {
         usage.reasoningOutputTokens > usage.outputTokens
       )
         throw new TypeError('Inconsistent request report');
+      const checkpoint =
+        report.checkpoint === undefined ? undefined : cleanCheckpoint(report.checkpoint);
+      if (
+        checkpoint === null ||
+        (report.responseId !== undefined &&
+          (!usageId(report.responseId) ||
+            responseIds.has(report.responseId) ||
+            !checkpoint?.turnTotal))
+      )
+        throw new TypeError('Invalid request identity or checkpoint');
+      if (report.responseId) responseIds.add(report.responseId);
       return Object.freeze({
         sequence: index + 1,
+        ...(report.responseId ? { responseId: report.responseId } : {}),
+        ...(checkpoint ? { checkpoint } : {}),
         model: pick(report.model, ['provider', 'id', 'basis']),
         usage: Object.freeze(usage),
       });

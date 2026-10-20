@@ -79,6 +79,9 @@ export function createDesktopBridge({ mode, storage, target }) {
     connectionChanged(event) {
       if (event?.state !== 'connected') store.disconnect(event?.hostId);
     },
+    ingestLocalRecords: store.ingestLocalRecords,
+    observeLocalIdentities: store.observeLocalIdentities,
+    getLocalUsageTargets: store.getLocalUsageTargets,
     seedIndex,
     getHealth: store.getHealth,
     dispose() {

@@ -213,7 +213,11 @@ export async function installCdpRuntime(config, dependencies = {}) {
   if (!doc || target.location?.origin !== config.origin || (target.top && target.top !== target))
     return { state: 'wrong-origin' };
   const previous = target[GLOBAL];
-  if (previous?.version === config.releaseVersion && ['ready', 'loading'].includes(previous.state))
+  if (
+    previous?.version === config.releaseVersion &&
+    typeof previous.exchangeLocalUsage === 'function' &&
+    ['ready', 'loading'].includes(previous.state)
+  )
     return previous.health();
   previous?.dispose?.();
 
@@ -223,6 +227,7 @@ export async function installCdpRuntime(config, dependencies = {}) {
     bridge = null,
     modelBridge = null;
   const roots = new Map();
+  const localSession = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
   const status = {
     version: config.releaseVersion,
     state: 'loading',
@@ -293,7 +298,8 @@ export async function installCdpRuntime(config, dependencies = {}) {
   const scan = () => {
     timer = null;
     if (stopped) return;
-    const seen = new Set();
+    const seen = new Set(),
+      localIdentities = [];
     const runningRows = config.runningRowSelector
       ? runningContentRows([...doc.querySelectorAll(config.runningRowSelector)])
       : [];
@@ -317,6 +323,7 @@ export async function installCdpRuntime(config, dependencies = {}) {
         ? runningIdentityForNode(row)
         : messageIdentityForNode(row);
       if (!identity) continue; // 身份缺失时不按序号、URL、正文或“最新消息”兜底。
+      localIdentities.push(identity);
       seen.add(row);
       const identityKey = JSON.stringify(identity);
       const action = identity.running
@@ -387,6 +394,7 @@ export async function installCdpRuntime(config, dependencies = {}) {
         roots.delete(row);
       }
     }
+    bridge?.observeLocalIdentities(localIdentities);
     status.state = 'ready';
   };
   const schedule = () => {
@@ -411,6 +419,29 @@ export async function installCdpRuntime(config, dependencies = {}) {
       return status.state;
     },
     health,
+    // 专用元数据入口；不伪造宿主通知。页面重载后 session 改变，助手会重新补读并按请求去重。
+    exchangeLocalUsage(envelope) {
+      if (stopped || !bridge || status.state !== 'ready') return { health: health() };
+      let ack = null;
+      if (
+        envelope?.session === localSession &&
+        Number.isSafeInteger(envelope.batchId) &&
+        envelope.batchId >= 0 &&
+        Array.isArray(envelope.records) &&
+        envelope.records.length <= 128 &&
+        Array.isArray(envelope.caughtUp) &&
+        envelope.caughtUp.length <= 128
+      ) {
+        bridge.ingestLocalRecords(envelope.records, envelope.caughtUp);
+        ack = envelope.batchId;
+      }
+      return {
+        health: health(),
+        session: localSession,
+        ack,
+        targets: bridge.getLocalUsageTargets(),
+      };
+    },
     dispose,
   };
   let stage = 'capability-discovery';

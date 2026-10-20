@@ -394,13 +394,7 @@ test('completed partial replies show the saved counts alongside their price and 
   assert.equal(byData(tree, 'data-ct-speed')[0].children[0], '未记录耗时');
   assert.equal(byData(tree, 'data-ct-cache-hit-rate')[0].children[0], '98.8%');
   const text = JSON.stringify(tree);
-  for (const expected of [
-    '319 token',
-    '25,216 token',
-    '52 token',
-    '数据不完整',
-    '已知部分标准价参考',
-  ])
+  for (const expected of ['319 token', '25,216 token', '52 token', '数据不完整', '标准价参考'])
     assert.ok(text.includes(expected), expected);
   assert.doesNotMatch(text, /— token|等待后续上报/);
   assert.match(nodes(tree, (n) => n.tag === 'button')[0].props['aria-label'], /25,587 token/);

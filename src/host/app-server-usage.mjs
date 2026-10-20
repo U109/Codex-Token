@@ -7,34 +7,27 @@ import {
 } from '../core/message-usage.mjs';
 import { createModelRequestTimer } from '../core/model-timing.mjs';
 
-const FIELDS = [
-  'totalTokens',
-  'inputTokens',
-  'cachedInputTokens',
-  'cacheWriteInputTokens',
-  'outputTokens',
-  'reasoningOutputTokens',
-];
-const id = (value) => typeof value === 'string' && /^[\w.:-]{1,200}$/.test(value);
+import {
+  USAGE_FIELDS,
+  usageId,
+  equalUsage,
+  cleanUsage,
+  addUsage,
+  emptyUsage,
+  cleanLocalUsage,
+  mergeRequest,
+  sumRequests,
+  completeLocalRequests,
+  reconcileLocalPrefix,
+} from '../core/request-usage.mjs';
+const FIELDS = USAGE_FIELDS,
+  id = usageId,
+  same = equalUsage,
+  counts = cleanUsage,
+  add = addUsage,
+  empty = emptyUsage;
 const key = (...parts) => JSON.stringify(parts);
-const same = (a, b) => FIELDS.every((field) => a?.[field] === b?.[field]);
-const counts = (raw) => {
-  if (!raw || !FIELDS.every((field) => Number.isSafeInteger(raw[field]) && raw[field] >= 0))
-    return null;
-  if (
-    raw.totalTokens !== raw.inputTokens + raw.outputTokens ||
-    raw.cachedInputTokens > raw.inputTokens ||
-    raw.cachedInputTokens + raw.cacheWriteInputTokens > raw.inputTokens ||
-    raw.reasoningOutputTokens > raw.outputTokens
-  )
-    return null;
-  return Object.fromEntries(FIELDS.map((field) => [field, raw[field]]));
-};
-const add = (a, b) => {
-  const result = Object.fromEntries(FIELDS.map((field) => [field, a[field] + b[field]]));
-  return FIELDS.every((field) => Number.isSafeInteger(result[field])) ? result : null;
-};
-const empty = () => Object.fromEntries(FIELDS.map((field) => [field, 0]));
+const isClosed = (record) => ['completed', 'failed', 'interrupted'].includes(record.source.status);
 const TOOL_TYPES = new Set([
   'commandExecution',
   'fileChange',
@@ -76,11 +69,61 @@ export function createAppServerUsageCollector({
   if (!Number.isSafeInteger(maxActiveTurns) || maxActiveTurns < 1)
     throw new TypeError('Invalid active turn limit');
   // turns 保存未结束回合，snapshots 检查同一线程的计数连续性，models 保存配置线索。
-  // 历史记录在 current 中，不能从这些临时状态反向补造历史。
+  // 历史记录在 current 中；本地请求也必须配合明确的消息身份，不能单凭累计量造历史。
   const turns = new Map(),
     snapshots = new Map(),
     models = new Map();
-  let active = Object.freeze([]);
+  let active = Object.freeze([]),
+    batch = false,
+    activeDirty = false,
+    indexDirty = false;
+  const localTurns = new Map(),
+    watchedThreads = new Map(),
+    localResponses = new Map();
+  let localBindings = new Map();
+  const notifyIndex = () => {
+    if (batch) {
+      indexDirty = true;
+      return;
+    }
+    try {
+      onChange(current);
+    } catch {
+      diagnose('persistence-unavailable');
+    }
+  };
+  const watch = (threadId, replay = false) => {
+    const revision = watchedThreads.get(threadId) ?? 0;
+    watchedThreads.delete(threadId);
+    watchedThreads.set(threadId, revision + (replay ? 1 : 0));
+    if (watchedThreads.size > 128) watchedThreads.delete(watchedThreads.keys().next().value);
+  };
+  const localState = (threadId, turnId) => {
+    const name = key('local', threadId, turnId);
+    let state = localTurns.get(name);
+    if (!state) {
+      if (localTurns.size >= 10000) throw new Error('Local turn capacity reached');
+      state = { threadId, turnId, reports: [], caughtUp: false, conflict: false };
+      localTurns.set(name, state);
+    }
+    return state;
+  };
+  const localComplete = (turn) => {
+    const state = localTurns.get(key(turn.hostId, turn.threadId, turn.turnId));
+    return (
+      state?.caughtUp &&
+      !state.conflict &&
+      completeLocalRequests(state.reports) &&
+      turn.requestReports.length === state.reports.length &&
+      same(turn.total, sumRequests(state.reports))
+    );
+  };
+  const incomplete = (turn) => turn.incomplete && !localComplete(turn);
+  const replaceReports = (turn, reports) => {
+    turn.requestReports = reports;
+    turn.requests = reports.length;
+    turn.total = sumRequests(reports);
+  };
   const diagnose = (code) => {
     try {
       onDiagnostic({ code });
@@ -132,7 +175,7 @@ export function createAppServerUsageCollector({
       durationMs: Math.max(0, now() - turn.observationStart),
       outputTokens: turn.total.outputTokens - turn.observationBase,
       samples: turn.resetObservation ? 0 : turn.observationSamples,
-      coverage: turn.observed && !turn.incomplete ? 'turn' : 'partial',
+      coverage: !incomplete(turn) && (turn.observed || localComplete(turn)) ? 'turn' : 'partial',
       includesWaiting: true,
     });
   const syncModel = (turn) => {
@@ -144,6 +187,10 @@ export function createAppServerUsageCollector({
     } catch {}
   };
   const publishActive = () => {
+    if (batch) {
+      activeDirty = true;
+      return;
+    }
     // 运行中快照只留在内存；完成后可保存已观测的部分小计，但必须保留覆盖范围说明。
     active = Object.freeze(
       [...turns.values()].map((turn) =>
@@ -154,14 +201,14 @@ export function createAppServerUsageCollector({
           scope: 'active-turn-reports',
           model: Object.freeze({ ...turn.model }),
           source: Object.freeze({
-            coverage: turn.incomplete ? 'partial' : 'observed-so-far',
+            coverage: incomplete(turn) ? 'partial' : 'observed-so-far',
             requestCount: turn.requests,
             status: turn.disconnected ? 'disconnected' : 'inProgress',
           }),
           usage: Object.freeze({ total: Object.freeze(turn.requests ? { ...turn.total } : {}) }),
           requestReports: Object.freeze([...turn.requestReports]),
           observation: observation(turn),
-          modelTiming: turn.modelTimer.snapshot(turn.incomplete ? 'partial' : 'turn'),
+          modelTiming: turn.modelTimer.snapshot(incomplete(turn) ? 'partial' : 'turn'),
         }),
       ),
     );
@@ -173,7 +220,10 @@ export function createAppServerUsageCollector({
   };
   const publish = (turn) => {
     const complete =
-      turn.observed && !turn.incomplete && turn.requests > 0 && turn.status === 'completed';
+      (turn.observed || localComplete(turn)) &&
+      !incomplete(turn) &&
+      turn.requests > 0 &&
+      turn.status === 'completed';
     const completedObservation = Object.freeze({
       ...observation(turn),
       coverage: complete ? 'turn' : 'partial',
@@ -204,11 +254,7 @@ export function createAppServerUsageCollector({
       next = mergeMessageUsage(next, record);
     }
     current = next;
-    try {
-      onChange(current);
-    } catch {
-      diagnose('persistence-unavailable');
-    }
+    notifyIndex();
   };
   const rememberItems = (turn, items) => {
     for (const item of items ?? []) {
@@ -219,7 +265,298 @@ export function createAppServerUsageCollector({
       }
     }
   };
+  // 只修正已有的精确消息绑定；日志本身没有 itemId，不能凭用量补造回复。
+  const publishLocalHistory = (state) => {
+    const name = key('local', state.threadId, state.turnId);
+    if (turns.has(name) || !state.reports.length || state.conflict) return;
+    const saved = current.records.filter(
+      (record) =>
+        record.hostId === 'local' &&
+        record.threadId === state.threadId &&
+        record.turnId === state.turnId,
+    );
+    const items = new Set([
+      ...saved.map((record) => record.itemId),
+      ...(localBindings.get(name)?.items ?? []),
+    ]);
+    for (const itemId of items) {
+      const previous = getMessageUsage(current, state.threadId, itemId, 'local');
+      if (previous && previous.turnId !== state.turnId)
+        throw new Error('Message identity conflict');
+      const oldReports = previous?.requestReports ?? [];
+      const legacy =
+        previous && (!oldReports.length || oldReports.some((report) => !report.checkpoint));
+      if (legacy && (!state.caughtUp || !completeLocalRequests(state.reports))) continue;
+      let reports;
+      if (state.caughtUp && completeLocalRequests(state.reports)) {
+        reports = reconcileLocalPrefix(oldReports, state.reports);
+        if (!reports) {
+          diagnose('conflicting-local-request');
+          return;
+        }
+      } else {
+        reports = oldReports;
+        for (const report of state.reports) {
+          const result = mergeRequest(reports, report);
+          if (!result.reports) {
+            diagnose('conflicting-local-request');
+            return;
+          }
+          reports = result.reports;
+        }
+      }
+      const total = sumRequests(reports);
+      const complete =
+        state.caughtUp && completeLocalRequests(reports) && previous?.source.status === 'completed';
+      const unchanged = same(previous?.usage.total, total);
+      const record = {
+        ...previous,
+        mode,
+        scope: 'turn-reported',
+        hostId: 'local',
+        threadId: state.threadId,
+        turnId: state.turnId,
+        itemId,
+        revision: previous?.revision ?? 0,
+        model: previous?.model ?? {},
+        source: {
+          coverage:
+            complete || (unchanged && previous?.source.coverage === 'observed-turn-reports')
+              ? 'observed-turn-reports'
+              : 'partial',
+          requestCount: reports.length,
+          status: previous?.source.status ?? 'unknown',
+        },
+        usage: { total },
+        requestReports: reports,
+        modelTiming: unchanged ? previous?.modelTiming : undefined,
+        observation: unchanged ? previous?.observation : undefined,
+      };
+      const clean = createMessageUsageIndex([record], { mode }).records[0];
+      if (previous && JSON.stringify(clean) === JSON.stringify(previous)) continue;
+      current = mergeMessageUsage(current, { ...record, revision: (previous?.revision ?? -1) + 1 });
+      notifyIndex();
+    }
+  };
+  const applyLocalToTurn = (turn, report, replay) => {
+    const result = mergeRequest(turn.requestReports, report);
+    if (!result.reports) {
+      turn.incomplete = true;
+      turn.modelTimer.invalidate();
+      diagnose('conflicting-local-request');
+      return { status: 'rejected' };
+    }
+    replaceReports(turn, result.reports);
+    if (result.added) {
+      if (replay) {
+        turn.resetObservation = true;
+        turn.modelTimer.invalidate();
+      } else {
+        turn.modelTimer.report(report.usage.outputTokens);
+        if (turn.resetObservation) {
+          turn.observationStart = now();
+          turn.observationBase = turn.total.outputTokens;
+          turn.observationSamples = 0;
+          turn.resetObservation = false;
+        } else turn.observationSamples++;
+      }
+    }
+    publishActive();
+    return { status: result.status, added: result.added };
+  };
+  const seedLocalTurn = (turn) => {
+    const state = localTurns.get(key(turn.hostId, turn.threadId, turn.turnId));
+    for (const report of state?.reports ?? []) applyLocalToTurn(turn, report, true);
+  };
+  const reconcileActiveLocal = (state) => {
+    const turn = turns.get(key('local', state.threadId, state.turnId));
+    if (!turn || state.conflict || !completeLocalRequests(state.reports)) return;
+    const reports = reconcileLocalPrefix(turn.requestReports, state.reports);
+    if (!reports) {
+      turn.incomplete = true;
+      diagnose('conflicting-local-request');
+      return;
+    }
+    const removed = turn.requestReports.some(
+      (old) =>
+        !reports.some(
+          (report) =>
+            same(old.usage, report.usage) && same(old.checkpoint?.total, report.checkpoint?.total),
+        ),
+    );
+    if (removed) {
+      // 对账纠正误计请求时，旧计时也可能包含该请求，不能继续作为可信采样。
+      turn.modelTimer = createModelRequestTimer({ now, started: false });
+      turn.resetObservation = true;
+      turn.observationStart = now();
+      turn.observationBase = sumRequests(reports).outputTokens;
+      turn.observationSamples = 0;
+    }
+    replaceReports(turn, reports);
+    publishActive();
+  };
+  const ingestLocal = (raw) => {
+    if (mode !== 'app-server-reported' || (raw?.hostId !== undefined && raw.hostId !== 'local'))
+      return { status: 'ignored' };
+    const clean = cleanLocalUsage(raw);
+    if (!clean) {
+      diagnose('invalid-local-request');
+      return { status: 'rejected' };
+    }
+    const name = key('local', clean.threadId, clean.turnId);
+    const turn = turns.get(name);
+    if (
+      !turn &&
+      !localTurns.has(name) &&
+      !localBindings.has(name) &&
+      !current.records.some(
+        (record) =>
+          record.hostId === 'local' &&
+          record.threadId === clean.threadId &&
+          record.turnId === clean.turnId,
+      )
+    )
+      return { status: 'ignored', reason: 'unbound-local-turn' };
+    const binding = localResponses.get(clean.responseId);
+    if (binding && binding !== name) {
+      diagnose('conflicting-local-identity');
+      return { status: 'rejected' };
+    }
+    if (!binding && localResponses.size >= 100000)
+      throw new Error('Local request capacity reached');
+    const state = localState(clean.threadId, clean.turnId);
+    if (turn && !clean.replay) syncModel(turn);
+    const report = {
+      responseId: clean.responseId,
+      checkpoint: clean.checkpoint,
+      usage: Object.freeze(clean.usage),
+      model: Object.freeze({ ...(!clean.replay && turn ? (turn.pendingModel ?? turn.model) : {}) }),
+    };
+    const result = mergeRequest(state.reports, report);
+    if (!result.reports) {
+      state.conflict = true;
+      if (turn) {
+        turn.incomplete = true;
+        turn.modelTimer.invalidate();
+      }
+      diagnose('conflicting-local-request');
+      return { status: 'rejected' };
+    }
+    localResponses.set(clean.responseId, name);
+    state.reports = result.reports;
+    if (result.added) state.caughtUp = false;
+    if (turn) {
+      if (!completeLocalRequests(state.reports)) {
+        turn.incomplete = true;
+        turn.modelTimer.invalidate();
+      }
+      const applied = applyLocalToTurn(turn, report, clean.replay);
+      if (applied.added && !clean.replay) turn.pendingModel = null;
+      return applied;
+    }
+    publishLocalHistory(state);
+    return { status: result.status };
+  };
   return {
+    getLocalUsageTargets() {
+      if (mode !== 'app-server-reported') return [];
+      const threads = [
+        ...new Set([
+          ...[...turns.values()]
+            .filter((turn) => turn.hostId === 'local')
+            .map((turn) => turn.threadId),
+          ...[...localBindings.values()].map((binding) => binding.threadId),
+          ...[...watchedThreads.keys()].reverse(),
+        ]),
+      ].slice(0, 128);
+      return threads.map((threadId) => ({ threadId, revision: watchedThreads.get(threadId) ?? 0 }));
+    },
+    observeLocalIdentities(identities) {
+      if (mode !== 'app-server-reported' || !Array.isArray(identities) || identities.length > 1000)
+        return;
+      const bindings = new Map();
+      for (const identity of identities) {
+        if (
+          identity?.hostId !== 'local' ||
+          !id(identity.threadId) ||
+          !id(identity.turnId) ||
+          (identity.itemId !== undefined && !id(identity.itemId))
+        )
+          continue;
+        const name = key('local', identity.threadId, identity.turnId);
+        const binding = bindings.get(name) ?? { threadId: identity.threadId, items: new Set() };
+        if (identity.itemId) binding.items.add(identity.itemId);
+        bindings.set(name, binding);
+        if (!localTurns.has(name)) {
+          localState(identity.threadId, identity.turnId);
+          watch(identity.threadId, true);
+        }
+        let turn = turns.get(name);
+        const closed = current.records.some(
+          (record) =>
+            record.hostId === 'local' &&
+            record.threadId === identity.threadId &&
+            record.turnId === identity.turnId &&
+            isClosed(record),
+        );
+        if (!turn && identity.running === true && !closed && turns.size < maxActiveTurns) {
+          turn = makeTurn('local', identity.threadId, identity.turnId, false);
+          turns.set(name, turn);
+          seedLocalTurn(turn);
+          activeDirty = true;
+        }
+        if (turn && identity.itemId)
+          rememberItems(turn, [{ type: 'agentMessage', id: identity.itemId }]);
+      }
+      localBindings = bindings;
+      for (const name of bindings.keys()) publishLocalHistory(localTurns.get(name));
+      if (activeDirty && !batch) {
+        activeDirty = false;
+        publishActive();
+      }
+    },
+    ingestLocalRecords(records, caughtUp = []) {
+      if (
+        !Array.isArray(records) ||
+        records.length > 128 ||
+        !Array.isArray(caughtUp) ||
+        caughtUp.length > 128
+      )
+        return { status: 'rejected' };
+      batch = true;
+      try {
+        for (const raw of records) {
+          try {
+            ingestLocal(raw);
+          } catch {
+            diagnose('local-record-capacity-or-identity-conflict');
+          }
+        }
+        for (const threadId of caughtUp.filter(id)) {
+          for (const state of localTurns.values())
+            if (state.threadId === threadId && !state.caughtUp) {
+              state.caughtUp = true;
+              try {
+                reconcileActiveLocal(state);
+                publishLocalHistory(state);
+              } catch {
+                diagnose('local-record-capacity-or-identity-conflict');
+              }
+            }
+        }
+      } finally {
+        batch = false;
+        if (indexDirty) {
+          indexDirty = false;
+          notifyIndex();
+        }
+        if (activeDirty || caughtUp.length) {
+          activeDirty = false;
+          publishActive();
+        }
+      }
+      return { status: 'accepted' };
+    },
     getIndex: () => current,
     getActive: () => active,
     tick() {
@@ -229,7 +566,7 @@ export function createAppServerUsageCollector({
       for (const turn of turns.values()) syncModel(turn);
       if (turns.size) publishActive();
     },
-    // 恢复或注入时只接受已校验的展示记录，不从历史推断活跃回合；回合中途重启后仍显示未知。
+    // 恢复索引不推断活跃回合；重启后的本地补读另需宿主明确的回合或消息身份。
     mergeIndex(index) {
       if (index.mode !== mode) throw new TypeError('Usage source mismatch');
       let next = current;
@@ -265,6 +602,7 @@ export function createAppServerUsageCollector({
         }
         const threadId = params.threadId;
         if (!id(threadId)) return { status: 'ignored' };
+        if (hostId === 'local') watch(threadId);
         if (method === 'thread/settings/updated') {
           const model = modelConfig(params.threadSettings);
           rememberThread(models, key(hostId, threadId), model);
@@ -304,7 +642,8 @@ export function createAppServerUsageCollector({
               (record) =>
                 record.hostId === hostId &&
                 record.threadId === threadId &&
-                record.turnId === turnId,
+                record.turnId === turnId &&
+                isClosed(record),
             )
           ) {
             return { status: 'ignored', reason: 'already-observed-turn' };
@@ -312,6 +651,8 @@ export function createAppServerUsageCollector({
           if (turns.size >= maxActiveTurns) throw new Error('Active turn capacity reached');
           turn = makeTurn(hostId, threadId, turnId, true);
           turns.set(turnKey, turn);
+          if (hostId === 'local') localState(threadId, turnId);
+          seedLocalTurn(turn);
           publishActive();
           return { status: 'accepted' };
         }
@@ -322,13 +663,17 @@ export function createAppServerUsageCollector({
               (record) =>
                 record.hostId === hostId &&
                 record.threadId === threadId &&
-                record.turnId === turnId,
+                record.turnId === turnId &&
+                isClosed(record),
             )
           ) {
             return { status: 'ignored', reason: 'closed-turn-replay' };
           }
           // 不能从最终累计量反推缺失的回合开始状态。
-          turn ??= makeTurn(hostId, threadId, turnId, false);
+          if (!turn) {
+            turn = makeTurn(hostId, threadId, turnId, false);
+            seedLocalTurn(turn);
+          }
           rememberItems(turn, Array.isArray(params.turn?.items) ? params.turn.items : []);
           turn.status = ['completed', 'failed', 'interrupted'].includes(params.turn?.status)
             ? params.turn.status
@@ -368,6 +713,13 @@ export function createAppServerUsageCollector({
           publishActive();
           return { status: 'rejected' };
         }
+        // 额度等事件也会在新回合重发旧快照；身份变了不代表 last 是新请求。
+        if (previous && same(previous.total, total) && same(previous.last, last))
+          return { status: 'ignored', reason: 'duplicate-snapshot' };
+        const reportKey = JSON.stringify([total, last]);
+        // 先去重再更新线程基线；旧报告乱序重放不能回退基线或破坏有效计时。
+        if (turn?.reports.has(reportKey))
+          return { status: 'ignored', reason: 'replayed-request-report' };
         if (previous?.turnId === turnId && same(previous.total, total)) {
           if (!same(previous.last, last) && turn) {
             turn.incomplete = true;
@@ -383,7 +735,8 @@ export function createAppServerUsageCollector({
               (record) =>
                 record.hostId === hostId &&
                 record.threadId === threadId &&
-                record.turnId === turnId,
+                record.turnId === turnId &&
+                isClosed(record),
             )
           )
             return { status: 'ignored', reason: 'closed-turn-replay' };
@@ -392,17 +745,44 @@ export function createAppServerUsageCollector({
           if (turns.size >= maxActiveTurns) throw new Error('Active turn capacity reached');
           turn = makeTurn(hostId, threadId, turnId, false);
           turns.set(turnKey, turn);
-        }
-        rememberThread(snapshots, threadKey, { total, last, turnId });
-        const reportKey = JSON.stringify([total, last]);
-        if (turn.reports.has(reportKey)) {
-          turn.incomplete = true;
-          turn.modelTimer.invalidate();
-          publishActive();
-          return { status: 'ignored', reason: 'replayed-request-report' };
+          seedLocalTurn(turn);
         }
         if (turn.reports.size >= 10000) throw new Error('Request capacity reached');
-        turn.reports.add(reportKey);
+        syncModel(turn);
+        const local = localTurns.get(turnKey);
+        if (local?.caughtUp && !local.conflict && completeLocalRequests(local.reports)) {
+          const latest = Math.max(
+            ...local.reports.map((report) => report.checkpoint.total.totalTokens),
+          );
+          if (
+            total.totalTokens <= latest &&
+            !local.reports.some(
+              (report) => same(report.checkpoint.total, total) && same(report.usage, last),
+            )
+          )
+            return { status: 'ignored', reason: 'outside-local-request-sequence' };
+        }
+        const merged = mergeRequest(turn.requestReports, {
+          checkpoint: Object.freeze({ total: Object.freeze(total) }),
+          usage: Object.freeze(last),
+          model: Object.freeze({ ...(turn.pendingModel ?? turn.model) }),
+        });
+        if (!merged.reports) {
+          turn.incomplete = true;
+          turn.modelTimer.invalidate();
+          diagnose(merged.status === 'overflow' ? 'usage-overflow' : 'conflicting-request-report');
+          publishActive();
+          return { status: 'rejected' };
+        }
+        if (!merged.added) {
+          // 本地记录先到时这里只核对；迟到或乱序的通知不回退基线，也不再次采样。
+          if (!previous || total.totalTokens >= previous.total.totalTokens)
+            rememberThread(snapshots, threadKey, { total, last, turnId });
+          turn.reports.add(reportKey);
+          replaceReports(turn, merged.reports);
+          publishActive();
+          return { status: 'ignored', reason: 'local-record-confirmed' };
+        }
         turn.disconnected = false;
         // 首份累计量可以包含旧回合，仅校验它减去本次请求后仍是有效历史；不把历史计入本轮。
         const invalidInitialHistory =
@@ -422,27 +802,10 @@ export function createAppServerUsageCollector({
           turn.incomplete = true;
           diagnose('unknown-initial-baseline');
         }
-        const next = add(turn.total, last);
-        if (!next) {
-          turn.incomplete = true;
-          turn.resetObservation = true;
-          turn.pendingModel = null;
-          turn.modelTimer.invalidate();
-          diagnose('usage-overflow');
-          publishActive();
-          return { status: 'rejected' };
-        }
-        turn.total = next;
-        turn.requests++;
+        rememberThread(snapshots, threadKey, { total, last, turnId });
+        turn.reports.add(reportKey);
+        replaceReports(turn, merged.reports);
         turn.modelTimer.report(last.outputTokens);
-        syncModel(turn);
-        turn.requestReports.push(
-          Object.freeze({
-            sequence: turn.requests,
-            model: Object.freeze({ ...(turn.pendingModel ?? turn.model) }),
-            usage: Object.freeze({ ...last }),
-          }),
-        );
         turn.pendingModel = null;
         if (turn.resetObservation) {
           // 接入或重连后的首份报告可能包含观测前的输出，仅用作计时基线。

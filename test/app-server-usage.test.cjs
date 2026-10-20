@@ -658,3 +658,86 @@ test('mid-turn attachment and reconnection exclude pre-observation output from t
   assert.equal(o.durationMs, 2000);
   assert.equal(o.outputTokens, 100);
 });
+
+test('an unchanged snapshot from the previous turn is not a request in the new turn', async () => {
+  let clock = 0;
+  const f = await fixture({ now: () => clock }),
+    a = usage(1000),
+    b = usage(2000);
+  f.start();
+  clock = 1000;
+  f.report(a);
+  f.finish();
+  const history = f.get();
+  f.start('A', 't2');
+  const waiting = f.collector.getActive();
+  clock = 2000;
+  f.report(a, a, 'A', 't2');
+  f.report(a, a, 'A', 't2');
+  assert.equal(f.collector.getActive(), waiting, 'A repeated snapshot is not fresh usage');
+  assert.deepEqual(waiting[0].usage.total, {});
+  assert.equal(waiting[0].source.requestCount, 0);
+  clock = 4000;
+  f.report(b, sum(a, b), 'A', 't2');
+  const live = f.collector.getActive()[0];
+  assert.deepEqual(live.usage.total, b);
+  assert.equal(live.source.requestCount, 1);
+  assert.equal(live.source.coverage, 'observed-so-far');
+  assert.equal(live.modelTiming.durationMs, 3000);
+  assert.equal(live.modelTiming.outputTokens, b.outputTokens);
+  f.finish('A', 't2', 'm2');
+  assert.deepEqual(f.get('A', 'm2').usage.total, b);
+  assert.equal(f.get('A', 'm2').source.coverage, 'observed-turn-reports');
+  assert.deepEqual(f.get(), history);
+  assert.deepEqual(f.diagnostics, []);
+  const restored = f.records.parseMessageUsage(
+    f.records.serializeMessageUsage(f.collector.getIndex()),
+  );
+  assert.deepEqual(f.records.getMessageUsage(restored, 'A', 'm2').usage.total, b);
+});
+
+test('a repeated previous-turn snapshot cannot invent an active turn or prove a zero request', async () => {
+  for (const a of [usage(1000), usage(0)]) {
+    const f = await fixture();
+    f.start();
+    f.report(a);
+    f.finish();
+    f.report(a, a, 'A', 't2');
+    assert.deepEqual(f.collector.getActive(), []);
+    f.start('A', 't2');
+    f.report(a, a, 'A', 't2');
+    f.finish('A', 't2', 'm2');
+    assert.equal(f.get('A', 'm2').usage.total.totalTokens, null);
+    assert.equal(f.get('A', 'm2').source.requestCount, 0);
+    assert.equal(f.get('A', 'm2').source.coverage, 'unknown');
+    assert.deepEqual(f.diagnostics, []);
+  }
+});
+
+test('replaying an earlier report never rewinds the cumulative baseline or changes valid samples', async () => {
+  let clock = 0;
+  const f = await fixture({ now: () => clock }),
+    a = usage(1000),
+    b = usage(2000),
+    c = usage(3000);
+  f.start();
+  clock = 1000;
+  f.report(a);
+  clock = 2000;
+  f.report(b, sum(a, b));
+  const before = f.collector.getActive();
+  clock = 2500;
+  f.report(a);
+  assert.equal(f.collector.getActive(), before);
+  f.report(b, sum(a, b));
+  assert.equal(f.collector.getActive(), before);
+  clock = 3000;
+  f.report(c, sum(a, b, c));
+  f.finish();
+  assert.deepEqual(f.get().usage.total, sum(a, b, c));
+  assert.equal(f.get().source.requestCount, 3);
+  assert.equal(f.get().source.coverage, 'observed-turn-reports');
+  assert.equal(f.get().modelTiming.durationMs, 3000);
+  assert.equal(f.get().modelTiming.samples, 3);
+  assert.deepEqual(f.diagnostics, []);
+});
